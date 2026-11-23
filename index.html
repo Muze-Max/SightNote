@@ -1578,7 +1578,7 @@
         <h2>管理员</h2>
         <span class="note" id="adminNoteLine">工作与事务沟通</span>
       </div>
-      <div id="adminList"></div>
+      <div id="adminChatList"></div>
       <div class="hint-mini" id="adminHint" style="margin:10px 2px 0;font-size:10.5px;color:#b0b0a6;">
         这里是和管理员的工作沟通渠道，和好友私聊互不相通。
       </div>
@@ -3304,9 +3304,23 @@ function loadProfile(name){
   applySaved(data);
 }
 
+/* 管理员永远不写进好友列表（普通用户视角） */
+function sanitizeAdminFriendLocal(){
+  try{
+    const s = state && state.social;
+    if(!s || typeof s !== 'object') return;
+    const adm = adminNameSafe();
+    const cu = currentNameSafe();
+    if(!adm || cu === adm) return;
+    if(Array.isArray(s.friends) && s.friends.indexOf(adm) >= 0) s.friends = s.friends.filter(n => n !== adm);
+    if(s.notes && s.notes[adm]) delete s.notes[adm];
+  }catch(e){}
+}
+
 function saveLocal(){
   if(!currentUser) return;
   try{
+    sanitizeAdminFriendLocal();
     libSyncActive();
     const main = libGet(LIB_MAIN);
     localStorage.setItem(profileKey(currentUser), JSON.stringify({
@@ -3898,6 +3912,7 @@ function enterAccount(name, cloudData){
   // 登录后确保突触码存在（老账号没生成过就补一个，并写进云端映射）
   setTimeout(() => { try{ ensureSynapse().then(() => updateSynapseUI()).catch(() => {}); }catch(e){} }, 400);
   // 管理员不再作为好友：清掉历史自动加的那条（聊到管理员的旧消息搬进管理员通道）
+  setTimeout(() => { try{ stripAdminFriend(); }catch(e){} }, 0);
   setTimeout(() => { try{ stripAdminFriend(); }catch(e){} }, 900);
   setTimeout(() => { try{ stripAdminFriend(); }catch(e){} }, 2800);
   // 登录后顺手核对一下有没有好友改了名（不会多出一个号）
@@ -5284,16 +5299,16 @@ function openSocial(){
 }
 
 function renderSocial(){
+  const list = $('#friendList');
+  const friendNames = social().friends.filter(n => !(n === ADMIN_NAME && !isAdmin()));
   const note = $('#friendNote');
-  if(note) note.textContent = social().friends.length ? '共 ' + social().friends.length + ' 位' : '还没有好友';
+  if(note) note.textContent = friendNames.length ? '共 ' + friendNames.length + ' 位' : '还没有好友';
 
   renderMeet();
 
   // 顺手核对好友是否改过名：有就并成一条，不到 60 秒不会重复发请求
   setTimeout(() => { try{ sweepFriendRenames(); }catch(e){} }, 0);
 
-  const list = $('#friendList');
-  const friendNames = social().friends.filter(n => !(n === ADMIN_NAME && !isAdmin()));
   if(list){
     list.innerHTML = '';
     if(!friendNames.length){
@@ -5426,7 +5441,7 @@ function setSocialTab(tab){
 /* ---------- 管理员：与好友同级的独立栏 ---------- */
 let adminCodeCache = '';
 async function renderAdminPane(){
-  const box = $('#adminList');
+  const box = $('#adminChatList');
   if(!box) return;
   const line = $('#adminNoteLine');
   const s = social();
