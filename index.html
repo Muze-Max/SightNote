@@ -1464,6 +1464,9 @@
           <div class="act">查看 →</div>
         </div>
       </div>
+      <div class="lib-row" style="margin:10px 0 2px;">
+        <div class="lib-chip add" id="libNewChip" role="button" tabindex="0" title="新建一个独立的记忆库"><span class="lc-n">＋ 新建记忆库</span></div>
+      </div>
       <div class="setting-row" style="margin-top:12px;">
         <div>
           朗读
@@ -9137,13 +9140,6 @@ function renderLibs(){
     });
     row.appendChild(chip);
   });
-  // 「新建」和「默认记忆库」同款胶囊，就排在同一行末尾
-  const add = document.createElement('div');
-  add.className = 'lib-chip add';
-  add.id = 'libNewChip';
-  add.innerHTML = '<span class="lc-n">＋ 新建记忆库</span>';
-  add.addEventListener('click', () => openLibModal('create'));
-  row.appendChild(add);
 }
 
 function openLibModal(mode, id){
@@ -9172,6 +9168,10 @@ function closeLibModal(){
 }
 
 if($('#newLib')) $('#newLib').addEventListener('click', () => openLibModal('create'));
+if($('#libNewChip')){
+  $('#libNewChip').addEventListener('click', () => openLibModal('create'));
+  $('#libNewChip').addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); openLibModal('create'); } });
+}
 if($('#closeLibModal')) $('#closeLibModal').addEventListener('click', closeLibModal);
 if(libModalEl) libModalEl.addEventListener('click', (e) => { if(e.target === libModalEl) closeLibModal(); });
 if($('#libNameInput')) $('#libNameInput').addEventListener('keydown', (e) => {
