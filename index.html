@@ -1576,11 +1576,11 @@
     <div id="paneAdmin" class="hidden">
       <div class="sec-head" style="margin-top:4px;">
         <h2>管理员</h2>
-        <span class="note" id="adminNoteLine">负责账号安全与数据治理</span>
+        <span class="note" id="adminNoteLine">工作与事务沟通</span>
       </div>
       <div id="adminList"></div>
       <div class="hint-mini" id="adminHint" style="margin:10px 2px 0;font-size:10.5px;color:#b0b0a6;">
-        管理员能注销违规账号、清理失效记录；有问题可以直接和他对话。
+        这里是和管理员的工作沟通渠道，和好友私聊互不相通。
       </div>
     </div>
   </div>
@@ -3139,7 +3139,8 @@ function normSocial(s){
     at: Number(g.at) || 0
   })) : [];
   const friends = (Array.isArray(s.friends) ? s.friends.filter(x => typeof x === 'string' && x) : [])
-    .filter((x, i, arr) => arr.indexOf(x) === i);
+    .filter((x, i, arr) => arr.indexOf(x) === i)
+    .filter(x => !(adminNameSafe() && x === adminNameSafe()));   // 管理员不当好友
   // 收到的申请：同一个人只留最新一条；已经是好友的不再挂着「待处理」
   const rawReq = Array.isArray(s.req) ? s.req.filter(r => r && typeof r.from === 'string' && r.from) : [];
   const req = [];
@@ -3623,6 +3624,9 @@ function dataScore(d){
   return items + (d.known || []).length * 2 + (d.unknown || []).length * 2 +
     Object.values(d.views || {}).reduce((s,v) => s + (Number(v) || 0), 0);
 }
+function adminNameSafe(){ try{ return (typeof ADMIN_NAME === 'string') ? ADMIN_NAME : ''; }catch(e){ return ''; } }
+function currentNameSafe(){ try{ return currentUser || ''; }catch(e){ return ''; } }
+
 function mergeData(base, extra){
   const out = JSON.parse(JSON.stringify(base || {}));
   out.customSets = Array.isArray(out.customSets) ? out.customSets : [];
@@ -3641,9 +3645,13 @@ function mergeData(base, extra){
 
   // 视窗：好友、申请、聊天各并一次，聊天按“时间+发送人+内容”去重
   const ex = normSocial(extra.social);
+  // 管理员不是好友：云端旧档案里那条不要再合并回来
+  const adm = adminNameSafe();
+  if(adm) ex.friends = ex.friends.filter(n => n !== adm);
   ex.friends.forEach(n => { if(!out.social.friends.includes(n)) out.social.friends.push(n); });
   ex.req.forEach(r => { if(!out.social.req.some(x => x.from === r.from)) out.social.req.push(r); });
   Object.keys(ex.chats || {}).forEach(f => {
+    if(adm && f === adm && currentNameSafe() !== adm) return;   // 和「管理员账号」的旧私聊不再并回好友聊天
     const mine = out.social.chats[f] = Array.isArray(out.social.chats[f]) ? out.social.chats[f] : [];
     const seen = new Set(mine.map(m => (m.at || 0) + '|' + (m.from || '') + '|' + (m.text || '') + '|' + ((m.share && m.share.name) || '')));
     (ex.chats[f] || []).forEach(m => {
@@ -3658,6 +3666,20 @@ function mergeData(base, extra){
   Object.keys(ex.notes || {}).forEach(f => {
     const v = ex.notes[f];
     if(typeof v === 'string' && v) out.social.notes[f] = v;
+  });
+
+  // 管理员通道单独合并，和好友聊天互不干扰
+  Object.keys(ex.adminChats || {}).forEach(k => {
+    const mine = out.social.adminChats[k] = Array.isArray(out.social.adminChats[k]) ? out.social.adminChats[k] : [];
+    const seen = new Set(mine.map(m => (m.at || 0) + '|' + (m.from || '') + '|' + (m.text || '') + '|' + ((m.share && m.share.name) || '')));
+    (ex.adminChats[k] || []).forEach(m => {
+      const kk = (m.at || 0) + '|' + (m.from || '') + '|' + (m.text || '') + '|' + ((m.share && m.share.name) || '');
+      if(!seen.has(kk)){ mine.push(m); seen.add(kk); }
+    });
+    mine.sort((a,b) => (a.at || 0) - (b.at || 0));
+  });
+  Object.keys(ex.adminRead || {}).forEach(k => {
+    out.social.adminRead[k] = Math.max(Number(out.social.adminRead[k]) || 0, Number(ex.adminRead[k]) || 0);
   });
 
   // 交友：发出的申请按“对象”合并（已完成优先），收到的历史按“人+时间”去重
@@ -3875,7 +3897,9 @@ function enterAccount(name, cloudData){
   setTimeout(bgSyncOnce, 20000);
   // 登录后确保突触码存在（老账号没生成过就补一个，并写进云端映射）
   setTimeout(() => { try{ ensureSynapse().then(() => updateSynapseUI()).catch(() => {}); }catch(e){} }, 400);
-  // 管理员不再自动塞进好友列表：管理员走「管理员」通道，和好友聊天分开
+  // 管理员不再作为好友：清掉历史自动加的那条（聊到管理员的旧消息搬进管理员通道）
+  setTimeout(() => { try{ stripAdminFriend(); }catch(e){} }, 900);
+  setTimeout(() => { try{ stripAdminFriend(); }catch(e){} }, 2800);
   // 登录后顺手核对一下有没有好友改了名（不会多出一个号）
   setTimeout(() => { try{ sweepFriendRenames(); }catch(e){} }, 3000);
   // 登入时检查是否有别台设备正在使用同一个名字
@@ -5115,6 +5139,33 @@ async function ensureAdminFriend(){
   try{ await pushMySocial(); }catch(e){}
   return true;
 }
+/* 管理员不当作好友：只清掉旧版本自动加进来的那条；
+   好友里的聊天记录原样保留（那是私人聊天，不进管理员通道） */
+async function stripAdminFriend(){
+  if(!currentUser || currentUser === ADMIN_NAME) return false;
+  const s = social();
+  let changed = false;
+  if(s.friends.includes(ADMIN_NAME)){
+    s.friends = s.friends.filter(n => n !== ADMIN_NAME);
+    changed = true;
+  }
+  if(s.read && s.read[ADMIN_NAME]){ delete s.read[ADMIN_NAME]; changed = true; }
+  if(s.notes && s.notes[ADMIN_NAME]){ delete s.notes[ADMIN_NAME]; changed = true; }
+  if(changed){
+    save();
+    try{ renderSocial(); }catch(e){}
+    // 只改云端那一行的好友列表；聊天记录保持原样
+    try{
+      const row = await cloudPull(currentUser);
+      const d = row ? parseCloudPayload(row.payload) : null;
+      if(d){
+        d.social = normSocial(state.social);
+        await cloudPutRaw(currentUser, d);
+      }
+    }catch(e){}
+  }
+  return changed;
+}
 function remarkOf(name){
   const v = social().notes ? social().notes[name] : '';
   return (typeof v === 'string') ? v : '';
@@ -5242,12 +5293,13 @@ function renderSocial(){
   setTimeout(() => { try{ sweepFriendRenames(); }catch(e){} }, 0);
 
   const list = $('#friendList');
+  const friendNames = social().friends.filter(n => !(n === ADMIN_NAME && !isAdmin()));
   if(list){
     list.innerHTML = '';
-    if(!social().friends.length){
+    if(!friendNames.length){
       list.innerHTML = '<div class="transit-empty">加上好友后，可以聊天、互发知识库和记忆库</div>';
     }
-    social().friends.forEach(name => {
+    friendNames.forEach(name => {
       const row = document.createElement('div');
       row.className = 'friend-row';
       const msgs = social().chats[name] || [];
@@ -5380,7 +5432,7 @@ async function renderAdminPane(){
   const s = social();
   // 管理员这栏：普通用户发来的消息（存在 adminChats，和好友聊天不交叉）
   if(isAdmin()){
-    if(line) line.textContent = '普通用户发来的消息都在这里';
+    if(line) line.textContent = '用户发来的工作消息';
     const names = Object.keys(s.adminChats || {}).filter(n => (s.adminChats[n] || []).length);
     const hint = $('#adminHint');
     if(!names.length){
@@ -5409,14 +5461,14 @@ async function renderAdminPane(){
     return;
   }
   // 普通用户：管理员栏就是和管理员聊天的入口，不显示任何可拉黑/删除的卡片
-  if(line) line.textContent = '系统管理员 · 和好友聊天互不相通';
+  if(line) line.textContent = '工作与事务沟通 · 和好友私聊互不相通';
   box.innerHTML = '';
   const row = document.createElement('div');
   row.className = 'friend-row';
   row.innerHTML =
     '<span class="av">管</span>' +
     '<span class="who"><span class="nm">' + escapeHtml(ADMIN_DISPLAY) + '</span>' +
-      '<div class="sub">系统管理员 · 点开直接聊天</div></span>';
+      '<div class="sub">系统管理员 · 点开直接留言</div></span>';
   row.addEventListener('click', () => openAdminChat('admin'));
   box.appendChild(row);
 }
@@ -5651,6 +5703,8 @@ async function refreshSocialFromCloud(loud){
     }
     // 有好友改了名字：跟到新名字上，列表里不出现两个号
     sweepFriendRenames();
+    // 云端旧档案里若还挂着「管理员」这个好友，就地清掉再写回
+    if(!isAdmin() && (state.social.friends.includes(ADMIN_NAME) || state.social.chats[ADMIN_NAME])) stripAdminFriend();
   }catch(e){
     if(loud) setMeetSync('同步失败，稍后自动重试', true);
   }
@@ -5687,6 +5741,11 @@ async function addFriend(){
   if(name === currentUser){
     $('#friendAdd').disabled = false;
     toast('这是你自己的突触码');
+    return;
+  }
+  if(name === ADMIN_NAME){
+    $('#friendAdd').disabled = false;
+    toast('管理员在「管理员」里聊，不能加成好友');
     return;
   }
   if(social().friends.includes(name)){
