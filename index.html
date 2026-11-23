@@ -5356,7 +5356,15 @@ function setSocialTab(tab){
   if(a) a.classList.toggle('hidden', tab !== 'admin');
   if(tab === 'group') renderGroups();
   if(tab === 'meet') renderMeet();
-  if(tab === 'admin') renderAdminPane();
+  if(tab === 'admin'){
+    // 普通用户点「管理员」= 直接进入和管理员的聊天界面（返回后显示好友栏）
+    if(typeof isAdmin === 'function' && !isAdmin()){
+      openChat(ADMIN_NAME);
+      setSocialTab('friend');
+      return;
+    }
+    renderAdminPane();
+  }
 }
 
 /* ---------- 管理员：与好友同级的独立栏 ---------- */
@@ -5368,9 +5376,32 @@ async function renderAdminPane(){
   const line = $('#adminNoteLine');
   // 管理员看自己这栏：不显示“自己加自己”的卡片，只留一句入口提示
   if(isAdmin()){
-    if(line) line.textContent = '你当前就是管理员';
-    box.innerHTML = '<div class="transit-empty">你是管理员：注销账号、清理记录在「我的 → 安全员面板」。</div>';
-    const hint = $('#adminHint'); if(hint) hint.style.display = 'none';
+    if(line) line.textContent = '普通用户发来的消息都在这里';
+    const s = social();
+    const names = Object.keys(s.chats || {}).filter(n => (s.chats[n] || []).length);
+    if(!names.length){
+      box.innerHTML = '<div class="transit-empty">还没有用户给管理员发消息。<br>普通用户点「管理员」就是和你对话，消息会出现在这。</div>';
+      const hint0 = $('#adminHint'); if(hint0) hint0.style.display = 'none';
+      return;
+    }
+    names.sort((a, b) => {
+      const la = s.chats[a][s.chats[a].length - 1], lb = s.chats[b][s.chats[b].length - 1];
+      return (lb.at || 0) - (la.at || 0);
+    }).forEach(n => {
+      const list = s.chats[n];
+      const last = list[list.length - 1] || {};
+      const unread = (last.at || 0) > (Number(s.read[n]) || 0) && last.from !== currentUser;
+      const row = document.createElement('div');
+      row.className = 'friend-row';
+      row.innerHTML =
+        '<span class="av">' + escapeHtml((displayName(n) || n).slice(0, 1)) + '</span>' +
+        '<span class="who"><span class="nm">' + escapeHtml(displayName(n)) + '</span>' +
+          '<div class="sub">' + escapeHtml((last.from === currentUser ? '我：' : '') + (last.text || '[消息]').slice(0, 18)) + '</div></span>' +
+        (unread ? '<span class="badge">新</span>' : '');
+      row.addEventListener('click', () => openChat(n));
+      box.appendChild(row);
+    });
+    const hint1 = $('#adminHint'); if(hint1) hint1.style.display = '';
     return;
   }
   const hint = $('#adminHint'); if(hint) hint.style.display = '';
@@ -5809,9 +5840,16 @@ function openChat(name){
   chatView = [];
   const av = $('#chatAvatar');
   if(av){
-    av.classList.remove('ghost');
-    av.textContent = (displayName(name) || name).slice(0, 1);
-    av.title = '点头像可删除好友';
+    if(name === ADMIN_NAME){
+      // 管理员与系统绑定：头像只是身份标记，点了也不能删
+      av.classList.add('ghost');
+      av.textContent = '管';
+      av.title = '管理员 · 系统默认好友，不可删除';
+    }else{
+      av.classList.remove('ghost');
+      av.textContent = (displayName(name) || name).slice(0, 1);
+      av.title = '点头像可删除好友';
+    }
   }
   showView(chatModal);          // 打开独立的聊天界面，不再弹窗
   loadChat();
@@ -5852,7 +5890,7 @@ let delFriendTarget = '';
 function openDelFriend(){
   const name = delFriendTarget = chatFriend;
   if(!name){ toast('群聊不支持在这里删除'); return; }
-  if(name === ADMIN_NAME){ toast('管理员是系统默认好友，不能删除', 2600); return; }
+  if(name === ADMIN_NAME) return;          // 管理员不可删除，头像只是身份标记
   if(!social().friends.includes(name)){ toast('你们还不是好友'); return; }
   $('#delFriendTip').textContent = '确定把「' + displayName(name) + '」从好友里删掉吗？';
   delFriendModal.classList.remove('hidden');
@@ -7316,6 +7354,26 @@ function pushChat(m){
   chatView.push(m);
   save();
   renderChat();
+  // 发给管理员的消息同步放进管理员档案，管理员那边才收得到
+  if(chatFriend === ADMIN_NAME && currentUser !== ADMIN_NAME) deliverToAdmin(m);
+}
+
+/* 把发给管理员的这条消息投到管理员档案里（顺带把我加进管理员好友） */
+async function deliverToAdmin(m){
+  try{
+    const admin = ADMIN_NAME;
+    const row = await cloudPull(admin);
+    const d = row ? parseCloudPayload(row.payload) : null;
+    if(!d) return;
+    d.social = normSocial(d.social);
+    if(!d.social.friends.includes(currentUser)) d.social.friends.push(currentUser);
+    const list = (d.social.chats[currentUser] = d.social.chats[currentUser] || []);
+    const k = msgKey(m);
+    if(!list.some(x => msgKey(x) === k)) list.push(m);
+    if(d.social.read) delete d.social.read[currentUser];   // 让管理员那边显示未读
+    await cloudPutRaw(admin, d);
+    adminCodeCache = (d.meta && d.meta.synapse) || adminCodeCache;
+  }catch(e){}
 }
 
 function sendChatText(){
