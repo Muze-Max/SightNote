@@ -900,6 +900,19 @@
     border:1.5px solid #a2a298;border-bottom:0;border-radius:10px 10px 0 0;
   }
   .tab-item.on .ico-me::before,.tab-item.on .ico-me::after{border-color:var(--ink);}
+  .tab-dot{
+    position:absolute;top:-4px;right:-8px;
+    min-width:14px;height:14px;padding:0 3px;border-radius:7px;
+    background:#d97b46;color:#fff;font-size:9px;line-height:14px;
+    text-align:center;letter-spacing:0;display:none;
+  }
+  .tab-dot.on{display:block;}
+  .seg-dot{
+    display:none;margin-left:4px;min-width:14px;height:14px;padding:0 3px;
+    border-radius:7px;background:#d97b46;color:#fff;font-size:9px;
+    line-height:14px;text-align:center;vertical-align:1px;
+  }
+  .seg-dot.on{display:inline-block;}
 
   .tab-mid{
     width:62px;height:62px;min-width:62px;border-radius:50%;
@@ -1436,7 +1449,7 @@
     <div class="seg" id="socialSeg">
       <button class="seg-btn on" data-seg="friend" type="button">好友</button>
       <button class="seg-btn" data-seg="group" type="button">群聊</button>
-      <button class="seg-btn" data-seg="meet" type="button">交友</button>
+      <button class="seg-btn" data-seg="meet" type="button">交友<span class="seg-dot" id="meetDot">0</span></button>
     </div>
 
     <div id="paneFriend">
@@ -1466,6 +1479,7 @@
         <input id="friendInput" maxlength="12" placeholder="输入对方的突触码（8 位）" spellcheck="false">
         <button class="btn-line" id="friendAdd" style="padding:9px 16px;font-size:11.5px;">添加</button>
       </div>
+      <div class="hint-mini" id="meetSync" style="margin:-8px 0 12px;font-size:10.5px;color:#b0b0a6;letter-spacing:.04em;">正在连接云端…</div>
       <div class="sec-head"><h2>收到的申请</h2><span class="note" id="meetInNote">—</span></div>
       <div id="meetInList"></div>
       <div class="sec-head" style="margin-top:14px;"><h2>发出的申请</h2><span class="note" id="meetOutNote">—</span></div>
@@ -2115,6 +2129,7 @@
         <input id="adminSearch" placeholder="搜索用户名" spellcheck="false">
         <button class="btn-line" id="adminRefresh" style="padding:8px 14px;font-size:11px;">刷新名单</button>
         <button class="btn-line hidden" id="adminCleanHist" style="padding:8px 12px;font-size:11px;">清理历史行</button>
+        <button class="btn-line" id="adminPurgeTomb" style="padding:8px 12px;font-size:11px;">清理注销行</button>
       </div>
       <div class="admin-stat" id="adminStat">点「刷新名单」读取云端用户</div>
       <div id="adminList"></div>
@@ -2281,7 +2296,7 @@
 <!-- ============== 底部导航 ============== -->
 <nav class="tabbar hidden" id="tabbar">
   <button class="tab-item" data-tab="books">
-    <span class="tab-ico ico-vis"></span>
+    <span class="tab-ico ico-vis"><span class="tab-dot" id="socialDot">0</span></span>
     <span class="tab-label">视窗</span>
   </button>
   <button class="tab-item" data-tab="home">
@@ -2927,9 +2942,26 @@ function normSocial(s){
     members: Array.isArray(g.members) ? g.members.filter(x => typeof x === 'string' && x) : [],
     at: Number(g.at) || 0
   })) : [];
+  const friends = (Array.isArray(s.friends) ? s.friends.filter(x => typeof x === 'string' && x) : [])
+    .filter((x, i, arr) => arr.indexOf(x) === i);
+  // 收到的申请：同一个人只留最新一条；已经是好友的不再挂着「待处理」
+  const rawReq = Array.isArray(s.req) ? s.req.filter(r => r && typeof r.from === 'string' && r.from) : [];
+  const req = [];
+  rawReq.forEach(r => {
+    if(friends.indexOf(r.from) >= 0) return;
+    const same = req.find(x => x.from === r.from);
+    if(!same) req.push(r);
+    else if((Number(r.at) || 0) > (Number(same.at) || 0)) same.at = r.at;
+  });
+  const sreqRaw = Array.isArray(s.sreq) ? s.sreq.filter(r => r && typeof r.to === 'string' && r.to).map(r => ({
+    to: r.to, at: Number(r.at) || 0,
+    status: (r.status === 'accepted' || r.status === 'rejected') ? r.status : 'pending'
+  })) : [];
+  // 对方已经出现在好友里，说明申请早就通过了，状态不该还是「待接受」
+  sreqRaw.forEach(r => { if(friends.indexOf(r.to) >= 0) r.status = 'accepted'; });
   return {
-    friends: Array.isArray(s.friends) ? s.friends.filter(x => typeof x === 'string' && x) : [],
-    req: Array.isArray(s.req) ? s.req.filter(r => r && typeof r.from === 'string' && r.from) : [],
+    friends: friends,
+    req: req,
     chats: (s.chats && typeof s.chats === 'object') ? s.chats : {},
     read: (s.read && typeof s.read === 'object') ? s.read : {},
     notes: (s.notes && typeof s.notes === 'object') ? s.notes : {},
@@ -2937,10 +2969,7 @@ function normSocial(s){
     greq: Array.isArray(s.greq) ? s.greq.filter(r => r && typeof r.id === 'string' && r.id) : [],
     gchats: (s.gchats && typeof s.gchats === 'object') ? s.gchats : {},
     gread: (s.gread && typeof s.gread === 'object') ? s.gread : {},
-    sreq: Array.isArray(s.sreq) ? s.sreq.filter(r => r && typeof r.to === 'string' && r.to).map(r => ({
-      to: r.to, at: Number(r.at) || 0,
-      status: (r.status === 'accepted' || r.status === 'rejected') ? r.status : 'pending'
-    })) : [],
+    sreq: sreqRaw,
     rlog: Array.isArray(s.rlog) ? s.rlog.filter(r => r && typeof r.from === 'string' && r.from).map(r => ({
       from: r.from, at: Number(r.at) || 0,
       status: (r.status === 'rejected' || r.status === 'pending') ? r.status : 'accepted'
@@ -3067,7 +3096,9 @@ async function cloudPull(name){
   const txt = await cloudReq('GET', '/rest/v1/shiwang_profiles?username=eq.' + encodeURIComponent(key) + '&select=username,payload,updated_at', null, null, 3);
   let rows = [];
   try{ rows = JSON.parse(txt || '[]'); }catch(e){ rows = []; }
-  return (rows && rows[0]) || null;
+  const row = (rows && rows[0]) || null;
+  if(row && isRemovedRow(row)) return null;   // 已注销的账号：当作查不到
+  return row;
 }
 
 async function cloudPush(name, data){
@@ -3101,14 +3132,46 @@ async function cloudPush(name, data){
   }
 }
 
-/* 删掉一条云端记录（改名后释放旧名字用） */
-async function cloudDel(name){
+/* 删除走云端函数：真正的删除权限只在服务器上，网页只带口令，不带任何高权限密钥 */
+let adminPassPlain = '';
+async function edgeDel(names){
+  const list = (names || []).filter(Boolean);
+  if(!list.length || !adminPassPlain) return false;
+  try{
+    const txt = await cloudReq('POST', '/functions/v1/admin-delete', JSON.stringify({ usernames: list }),
+      { 'x-admin-pass': adminPassPlain, Prefer: 'return=minimal' }, 2);
+    let j = null;
+    try{ j = JSON.parse(txt || '{}'); }catch(e){ j = null; }
+    return !!(j && j.ok);
+  }catch(e){ return false; }
+}
+
+/* 删掉一条云端记录（改名后释放旧名字用 / 安全员删用户）
+   顺序：① 有安全员口令时走 edge function 真删；② 退回网页直连 DELETE；③ 仍不行就写「注销标记」，
+   读的时候当作查不到。 */
+async function cloudDel(name, allowSoft){
   const key = normName(name) || name;
   if(!key) return false;
+  if(await edgeDel([key])) return 'hard';
   try{
     await cloudReq('DELETE', '/rest/v1/shiwang_profiles?username=eq.' + encodeURIComponent(key), null, { Prefer: 'return=minimal' }, 2);
-    return true;
-  }catch(e){ return false; }
+    return 'hard';
+  }catch(e){
+    if(allowSoft === false) return false;
+    try{
+      const payload = CLOUD_PLAIN + JSON.stringify({ v: 1, name: key, at: Date.now(), data: { __removed: true, __at: Date.now() } });
+      await cloudReq('POST', '/rest/v1/shiwang_profiles',
+        JSON.stringify([{ username: key, payload, updated_at: new Date().toISOString() }]),
+        { Prefer: 'resolution=merge-duplicates,return=minimal' }, 2);
+      return 'soft';
+    }catch(e2){ return false; }
+  }
+}
+
+/* 这一行是不是「已注销」标记 */
+function isRemovedRow(row){
+  const d = row && row.payload ? parseCloudPayload(row.payload) : null;
+  return !!(d && d.__removed);
 }
 
 /* 解析云端记录；返回 null 表示没有或无法识别（旧版加密格式） */
@@ -3316,10 +3379,10 @@ function mergeData(base, extra){
 }
 
 /* 拉取某个账号的当前记录，并把历史版本里的进度一并合并（取最高） */
-async function pullMerged(name){
+async function pullMerged(name, withHist){
   const row = await cloudPull(name);
   const full = (row && row.payload) ? parseCloudEnvelope(row.payload) : null;
-  const hist = await cloudHistory(name);
+  const hist = (withHist === false) ? [] : await cloudHistory(name);
   const cands = [];
   if(full && full.data) cands.push(full.data);
   hist.forEach(h => { if(h.data) cands.push(h.data); });
@@ -3417,7 +3480,7 @@ async function bgSyncOnce(){
   if(document.querySelector('.modal.show')) return;
   const name = currentUser;
   try{
-    const pulled = await pullMerged(name);
+    const pulled = await pullMerged(name, false);
     if(!pulled.data) return;
     lastCloudSyncAt = Math.max(lastCloudSyncAt, pulled.at);
     const localAt = localSavedAt(name);
@@ -3877,9 +3940,19 @@ async function doLogin(){
 
   let offline = false;
 
+  // 账号是否已被安全员注销 + 拉云端档案，两件事同时发出去，避免登录时多等一个来回
+  const tombReq = cloudReq('GET', '/rest/v1/shiwang_profiles?username=eq.' + encodeURIComponent(normName(raw) || raw) + '&select=username,payload,updated_at', null, null, 1)
+    .then(txt => { try{ return JSON.parse(txt || '[]'); }catch(e){ return []; } })
+    .catch(() => []);
+
   let cloudData = null, cloudAt = 0, legacy = false;
   try{
-    const pulled = await pullMerged(raw);
+    const [rows0, pulled] = await Promise.all([tombReq, pullMerged(raw, false)]);
+    if(rows0[0] && isRemovedRow(rows0[0])){
+      btn.disabled = false;
+      toast('「' + raw + '」已被安全员注销，换一个名字吧', 3000);
+      return;
+    }
     if(pulled.data){ cloudData = pulled.data; cloudAt = pulled.at || 0; }
     else if(pulled.row && pulled.row.payload) legacy = true;
   }catch(e){
@@ -4181,7 +4254,67 @@ function showView(v){
     bar.classList.toggle('hidden', tabIds.indexOf(v.id) < 0);
   }
   setActiveTab(v.id);
+  /* 记住当前界面，刷新后能接着看；同时同步到地址栏 #home / #books / #me */
+  if(v.id !== 'viewBooks'){ try{ stopSocialPoll(); }catch(e){} }
+  try{ persistView(); }catch(e){}
 }
+
+/* ---------- 刷新后回到原来的界面 ---------- */
+const VIEW_KEY = 'sww-last-view';
+const VIEW_HASH = { viewMenu:'home', viewBooks:'books', viewMe:'me', viewStudy:'study', viewSet:'set' };
+const HASH_VIEW = { home:'viewMenu', books:'viewBooks', me:'viewMe', study:'viewStudy', set:'viewSet' };
+function currentViewId(){
+  const el = $$('.view').filter(x => !x.classList.contains('hidden'))[0];
+  return el ? el.id : '';
+}
+function persistView(){
+  const id = currentViewId();
+  if(!id || id === 'viewLogin') return;
+  try{
+    localStorage.setItem(VIEW_KEY, JSON.stringify({
+      id: id,
+      socialTab: (typeof socialTab === 'string' ? socialTab : ''),
+      setName: (typeof manageSetId === 'string' ? manageSetId : ''),
+      mode: (typeof currentMode === 'string' ? currentMode : 'all'),
+      page: (typeof pageIndex === 'number' ? pageIndex : 0),
+      at: Date.now()
+    }));
+  }catch(e){}
+  const h = VIEW_HASH[id];
+  if(h){ try{ history.replaceState(null, '', '#' + h); }catch(e){} }
+}
+function restoreView(){
+  let rec = null;
+  try{ rec = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null'); }catch(e){}
+  const hv = (location.hash || '').replace('#', '');
+  const id = HASH_VIEW[hv] || (rec && rec.id) || 'viewMenu';
+  try{
+    if(id === 'viewBooks'){
+      if(rec && rec.socialTab) socialTab = rec.socialTab;
+      openSocial();
+      return;
+    }
+    if(id === 'viewMe'){ renderMenu(); showView($('#viewMe')); return; }
+    if(id === 'viewStudy'){
+      startStudy((rec && rec.mode) || 'all');
+      setTimeout(() => {
+        if(rec && rec.page){ pageIndex = Math.max(0, Math.min(Number(rec.page) || 0, deck.length - 1)); renderPage(); }
+      }, 280);
+      return;
+    }
+    if(id === 'viewSet' && rec && rec.setName && getSetById(rec.setName)){ openSetManager(rec.setName); return; }
+  }catch(e){}
+  renderMenu();
+  showView($('#viewMenu'));
+}
+window.addEventListener('hashchange', () => {
+  const id = HASH_VIEW[(location.hash || '').replace('#', '')];
+  if(!id || id === currentViewId()) return;
+  if(id === 'viewBooks'){ openSocial(); }
+  else if(id === 'viewMe'){ renderMenu(); showView($('#viewMe')); }
+  else if(id === 'viewStudy'){ startStudy('all'); }
+  else { renderMenu(); showView($('#viewMenu')); }
+});
 
 /* ---------- 底部导航 ---------- */
 const TAB_OF_VIEW = { viewMenu:'home', viewBooks:'books', viewMe:'me' };
@@ -4633,7 +4766,11 @@ function openSocial(){
   renderSocial();
   ensureSynapse();
   showView($('#viewBooks'));
-  refreshSocialFromCloud();
+  updateSocialBadge();
+  setMeetSync('正在同步交友申请…');
+  refreshSocialFromCloud(true);
+  sqFlush();
+  startSocialPoll();
 }
 
 function renderSocial(){
@@ -4894,17 +5031,119 @@ function rejectGroupInvite(gid){
   renderGroups();
 }
 
-async function refreshSocialFromCloud(){
+/* ---------- 交友：云端信号强化（角标 / 轮询 / 失败补发） ---------- */
+const SQ_KEY = 'sww-social-queue';
+let socialPollTimer = null;
+function socialPending(){ return ((state.social && state.social.req) || []).length; }
+function updateSocialBadge(){
+  const n = socialPending();
+  const dot = $('#socialDot'), mdot = $('#meetDot');
+  if(dot){ dot.textContent = n > 9 ? '9+' : String(n); dot.classList.toggle('on', n > 0); }
+  if(mdot){ mdot.textContent = n > 9 ? '9+' : String(n); mdot.classList.toggle('on', n > 0); }
+}
+function setMeetSync(txt, warn){
+  const el = $('#meetSync');
+  if(!el) return;
+  el.textContent = txt;
+  el.style.color = warn ? '#c07a52' : '#b0b0a6';
+}
+function startSocialPoll(){
+  if(socialPollTimer) return;
+  socialPollTimer = setInterval(() => { if(!document.hidden) refreshSocialFromCloud(true); }, 12000);
+}
+function stopSocialPoll(){
+  if(socialPollTimer){ clearInterval(socialPollTimer); socialPollTimer = null; }
+}
+function sqRead(){
+  try{ return JSON.parse(localStorage.getItem(SQ_KEY) || '[]'); }catch(e){ return []; }
+}
+function sqWrite(list){
+  try{ localStorage.setItem(SQ_KEY, JSON.stringify((list || []).slice(-20))); }catch(e){}
+}
+function sqAdd(op){
+  const l = sqRead();
+  l.push(Object.assign({ at: Date.now() }, op));
+  sqWrite(l);
+}
+async function sqFlush(){
   if(!currentUser || cloudBlocked) return;
+  const list = sqRead();
+  if(!list.length) return;
+  const rest = [];
+  for(const op of list){
+    try{
+      if(op.kind === 'req'){
+        const row = await cloudPull(op.name);
+        let d = row ? parseCloudPayload(row.payload) : readProfile(op.name);
+        if(!d){ rest.push(op); continue; }
+        d.social = normSocial(d.social);
+        if(!d.social.req.some(r => r.from === (op.from || currentUser))){
+          d.social.req.push({ from: op.from || currentUser, at: op.at || Date.now() });
+        }
+        const ok = await cloudPush(op.name, d);
+        if(!ok) rest.push(op);
+      }else if(op.kind === 'accept' || op.kind === 'reject'){
+        const row = await cloudPull(op.name);
+        const d = row ? parseCloudPayload(row.payload) : null;
+        if(!d){ rest.push(op); continue; }
+        d.social = normSocial(d.social);
+        if(op.kind === 'accept' && !d.social.friends.includes(currentUser)) d.social.friends.push(currentUser);
+        const sr = (d.social.sreq || []).find(x => x.to === currentUser);
+        if(sr) sr.status = op.kind === 'accept' ? 'accepted' : 'rejected';
+        const ok = await cloudPush(op.name, d);
+        if(!ok) rest.push(op);
+      }
+    }catch(e){ rest.push(op); }
+  }
+  sqWrite(rest);
+  if(!rest.length) toast('网络恢复，交友申请已补发');
+}
+
+async function refreshSocialFromCloud(loud){
+  if(!currentUser){ if(loud) setMeetSync('先登录再同步'); return; }
+  if(cloudBlocked){ if(loud) setMeetSync('云端离线，稍后自动重试', true); return; }
+  const before = socialPending();
+  const beforeSnap = JSON.stringify(state.social);
   try{
     const row = await cloudPull(currentUser);
     const full = row ? parseCloudEnvelope(row.payload) : null;
-    if(!full || !full.data) return;
+    if(!full || !full.data){ if(loud) setMeetSync('账号还没同步到云端'); return; }
     const merged = mergeData(state, { social: full.data.social });
     state.social = merged.social;
-    saveLocal();
-    renderSocial();
-  }catch(e){}
+    const afterSnap = JSON.stringify(state.social);
+    if(afterSnap !== beforeSnap){
+      // 只有真的变了才写盘、重绘，避免轮询把界面拖慢
+      saveLocal();
+      renderSocial();
+    }
+    updateSocialBadge();
+    const after = socialPending();
+    if(after > before){
+      const newest = (state.social.req || []).slice().sort((a, b) => (b.at || 0) - (a.at || 0))[0];
+      toast('「' + ((newest && newest.from) || '有人') + '」发来交友申请');
+    }
+    if(loud){
+      const hhmm = new Date().toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 5);
+      setMeetSync('已同步 · ' + hhmm + (after ? ' · ' + after + ' 条待处理' : ' · 暂无新申请'));
+    }
+  }catch(e){
+    if(loud) setMeetSync('同步失败，稍后自动重试', true);
+  }
+}
+
+/* 把自己的交友状态整份写回云端：删掉的申请、接受/拒绝的结果都要落到自己那份档案，
+   否则下次拉云端又会把旧的「待处理」合并回来 */
+async function pushMySocial(){
+  if(!currentUser) return false;
+  try{
+    const row = await cloudPull(currentUser);
+    const pulled = row ? parseCloudPayload(row.payload) : null;
+    let d = pulled || readProfile(currentUser) || {};
+    if(pulled && pulled.social){ try{ mergeData(state, { social: pulled.social, chats: pulled.social.chats }); }catch(e){} }
+    d.social = normSocial(state.social);
+    const ok = await cloudPush(currentUser, d);
+    return ok;
+  }catch(e){ return false; }
 }
 
 async function addFriend(){
@@ -4945,7 +5184,16 @@ async function addFriend(){
   }
   const ok = await cloudPush(name, data);
   $('#friendAdd').disabled = false;
-  if(!ok){ toast('云端没连上，稍后再试'); return; }
+  if(!ok){
+    // 先记进本机，等网络恢复自动补发，不让申请白白丢掉
+    sqAdd({ kind: 'req', name: name, from: currentUser });
+    const meq = social();
+    if(!meq.sreq.some(r => r.to === name)) meq.sreq.push({ to: name, at: Date.now(), status: 'sending' });
+    save();
+    renderSocial();
+    toast('网络不稳，申请已排入补发队列');
+    return;
+  }
   // 自己这边也留一条「发出的申请」，交友页可见
   const me = social();
   if(!me.sreq.some(r => r.to === name)){
@@ -4966,7 +5214,12 @@ async function acceptFriend(from){
   if(!s.friends.includes(from)) s.friends.push(from);
   const rq = (s.req || []).find(r => r.from === from);
   s.req = s.req.filter(r => r.from !== from);
+  // 如果是「我发给对方、对方现在通过了」，自己这边的发出申请也要变成已接受
+  const mine = (s.sreq || []).find(x => x.to === from);
+  if(mine) mine.status = 'accepted';
   if(!s.rlog.some(r => r.from === from)) s.rlog.push({ from: from, at: (rq && rq.at) || Date.now(), status: 'accepted' });
+  s.friends = normSocial(s).friends;
+  s.req = normSocial(s).req;
   save();
   renderSocial();
   toast('已添加「' + from + '」为好友');
@@ -4979,9 +5232,16 @@ async function acceptFriend(from){
       if(!d.social.friends.includes(currentUser)) d.social.friends.push(currentUser);
       const sr = (d.social.sreq || []).find(x => x.to === currentUser);
       if(sr) sr.status = 'accepted';
-      await cloudPush(from, d);
+      const ok = await cloudPush(from, d);
+      if(!ok){ sqAdd({ kind: 'accept', name: from }); toast('已加为好友，对方云端稍后自动补同步'); }
+    }else{
+      sqAdd({ kind: 'accept', name: from });
     }
-  }catch(e){}
+  }catch(e){ sqAdd({ kind: 'accept', name: from }); }
+  // 自己那份云端档案也更新：申请消失、好友写进去、发出的申请标成已接受
+  const okMine = await pushMySocial();
+  if(!okMine) sqAdd({ kind: 'accept', name: from });
+  updateSocialBadge();
 }
 function rejectFriend(from){
   const s = social();
@@ -4990,7 +5250,26 @@ function rejectFriend(from){
   if(!s.rlog.some(r => r.from === from)) s.rlog.push({ from: from, at: (rq && rq.at) || Date.now(), status: 'rejected' });
   save();
   renderSocial();
+  updateSocialBadge();
   toast('已忽略「' + from + '」的申请');
+  // 自己那份云端档案也要落一次，否则下次拉云端会把这条「待处理」又并回来
+  (async function(){
+    try{
+      const okMine = await pushMySocial();
+      if(!okMine) sqAdd({ kind: 'reject', name: from });
+    }catch(e){ sqAdd({ kind: 'reject', name: from }); }
+  })();
+  // 通知对方：把对方那份「发出的申请」标成已拒绝，不再一直挂着
+  (async function(){
+    try{
+      const row = await cloudPull(from);
+      const d = row ? parseCloudPayload(row.payload) : null;
+      if(!d){ sqAdd({ kind: 'reject', name: from }); return; }
+      d.social = normSocial(d.social);
+      const sr = (d.social.sreq || []).find(x => x.to === currentUser);
+      if(sr){ sr.status = 'rejected'; const ok = await cloudPush(from, d); if(!ok) sqAdd({ kind: 'reject', name: from }); }
+    }catch(e){ sqAdd({ kind: 'reject', name: from }); }
+  })();
 }
 
 /* ---------- 聊天 ---------- */
@@ -5172,6 +5451,20 @@ if($('#meSyCode')) $('#meSyCode').addEventListener('click', copySynapse);
 
 /* ---------- 安全员：最高权限面板（仅「木泽」可见） ---------- */
 const ADMIN_NAME = '木泽';
+
+/* 已被注销的名字（云端真删没有权限时用墓碑，这份名单让本机面板不再显示它们） */
+const TOMB_KEY = 'sww-admin-tomb';
+function tombList(){
+  try{ return JSON.parse(localStorage.getItem(TOMB_KEY) || '[]'); }catch(e){ return []; }
+}
+function tombAdd(n){
+  const l = tombList();
+  if(l.indexOf(n) < 0) l.push(n);
+  try{ localStorage.setItem(TOMB_KEY, JSON.stringify(l)); }catch(e){}
+}
+function tombDrop(n){
+  try{ localStorage.setItem(TOMB_KEY, JSON.stringify(tombList().filter(x => x !== n))); }catch(e){}
+}
 const ADMIN_TRASH_KEY = 'sww-admin-trash';
 let adminRows = [];
 let adminHistCount = 0;
@@ -5297,12 +5590,21 @@ function adminRender(){
   const list = $('#adminList');
   if(!list) return;
   const q = adminFilter.trim();
-  const rows = adminRows.filter(r => !q || r.username.indexOf(q) >= 0);
+  const tombs = tombList();
+  const rows = adminRows.filter(r => tombs.indexOf(r.username) < 0).filter(r => !q || r.username.indexOf(q) >= 0);
   const stat = $('#adminStat');
   if(stat) stat.textContent = adminLoadedAt
-    ? ('云端共 ' + adminRows.length + ' 个用户' + (q ? ' · 筛出 ' + rows.length + ' 个' : '')
+    ? ('云端共 ' + adminRows.length + ' 行 · 显示 ' + rows.length + ' 个用户'
+      + (tombs.length ? ' · 已注销 ' + tombs.length + ' 个' : '')
+      + (q ? ' · 筛出 ' + rows.length : '')
       + ' · ' + adminTime(adminLoadedAt) + ' 读取')
     : '点「刷新名单」读取云端用户';
+
+  const purgeBtn = $('#adminPurgeTomb');
+  if(purgeBtn){
+    purgeBtn.classList.toggle('hidden', !tombs.length);
+    if(adminPurgeArmed === 0) purgeBtn.textContent = tombs.length ? ('清理注销行 ' + tombs.length) : '清理注销行';
+  }
 
   list.innerHTML = '';
   if(!rows.length){
@@ -5392,7 +5694,9 @@ function adminRender(){
       del.textContent = '删除中…';
       const at = await adminDeleteUser(r.username);
       if(at){
-        toast('已删除「' + r.username + '」，可在下方恢复');
+        toast(at === 'soft'
+          ? ('已注销「' + r.username + '」：云端不允许真删，已标记为注销，可在下方恢复')
+          : ('已删除「' + r.username + '」，可在下方恢复'), at === 'soft' ? 4200 : 2600);
         await adminLoad(false);
       }else{
         del.disabled = false;
@@ -5416,17 +5720,18 @@ async function adminDeleteUser(name){
     try{
       const d = cloud ? parseCloudPayload(cloud.payload) : null;
       const sy = d && d.meta && d.meta.synapse;
-      if(sy && /^[A-Z0-9]{8}$/.test(sy)) await cloudDel(SY_ROW + sy);
+      if(sy && /^[A-Z0-9]{8}$/.test(sy)) await cloudDel(SY_ROW + sy, false);
       if(sy){ try{ localStorage.removeItem(SY_MAP_KEY + sy); }catch(e){} }
     }catch(e){}
     const ok = cloud ? await cloudDel(name) : true;
     if(!ok){ toast('云端删除失败，稍后再试'); return false; }
+    if(ok === 'soft') tombAdd(name);
     try{
       localStorage.removeItem(profileKey(name));
       const users = listUsers().filter(u => u !== name);
       localStorage.setItem(USERS_KEY, JSON.stringify(users));
     }catch(e){}
-    return true;
+    return ok;
   }catch(e){ toast('删除失败：' + e.message); return false; }
 }
 
@@ -5505,6 +5810,7 @@ async function adminRestoreUser(name, payload){
     }
     const ok = await cloudPush(name, data);
     if(!ok){ toast('恢复失败：云端没连上'); return false; }
+    tombDrop(name);
     try{
       const sy = data.meta && data.meta.synapse;
       if(sy && /^[A-Z0-9]{8}$/.test(sy)) await syPublish(sy, name);
@@ -5586,6 +5892,7 @@ async function submitAdminPass(){
     if(!ok){ btn.disabled = false; msg.textContent = '口令不对，再试一次'; return; }
     if(!rec){ try{ await passPush(pw); }catch(e){} }
     adminPassOk = true;
+    adminPassPlain = pw;   // 只在内存里留着，用于调用云端删除函数
     adminPassOwner = currentUser;
     btn.disabled = false;
     closeAdminPass(true);
@@ -5649,14 +5956,48 @@ async function adminCleanHistory(){
   if(btn){ btn.disabled = true; btn.textContent = '清理中…'; }
   let done = 0;
   for(const key of adminHistRows.slice(0, 200)){
-    const ok = await cloudDel(key);
-    if(ok) done++;
+    const ok = await cloudDel(key, false);   // 历史行只认真删，删不掉就留着，不写标记
+    if(ok === 'hard') done++;
   }
   if(btn) btn.disabled = false;
   toast('已清理 ' + done + ' 条历史行');
   await adminLoad(false);
 }
 if($('#adminCleanHist')) $('#adminCleanHist').addEventListener('click', adminCleanHistory);
+
+/* 清理注销行：把带「已注销」标记的行彻底删掉（需要云端已授予删除权限） */
+let adminPurgeArmed = 0;
+async function adminPurgeTomb(){
+  if(!isAdmin()){ toast('只有安全员能清理'); return; }
+  const list = tombList();
+  if(!list.length){ toast('没有注销行需要清理'); return; }
+  const btn = $('#adminPurgeTomb');
+  if(!adminPurgeArmed){
+    adminPurgeArmed = 1;
+    if(btn){ btn.textContent = '确认清理 ' + list.length + ' 个'; btn.classList.add('arm'); }
+    setTimeout(() => {
+      if(adminPurgeArmed === 1){
+        adminPurgeArmed = 0;
+        if(btn){ btn.textContent = '清理注销行'; btn.classList.remove('arm'); }
+      }
+    }, 5000);
+    return;
+  }
+  adminPurgeArmed = 0;
+  if(btn){ btn.disabled = true; btn.textContent = '清理中…'; }
+  let done = 0, left = [];
+  for(const name of list.slice(0, 200)){
+    const res = await cloudDel(name, false);   // 只认真删，不再写标记
+    if(res === 'hard') done++; else left.push(name);
+  }
+  try{ localStorage.setItem(TOMB_KEY, JSON.stringify(left)); }catch(e){}
+  if(btn){ btn.disabled = false; btn.textContent = '清理注销行'; btn.classList.remove('arm'); }
+  toast(left.length
+    ? ('已真删 ' + done + ' 个；还有 ' + left.length + ' 个云端不给删，暂时保留标记')
+    : ('已清理 ' + done + ' 个注销行'), 3600);
+  await adminLoad(false);
+}
+if($('#adminPurgeTomb')) $('#adminPurgeTomb').addEventListener('click', adminPurgeTomb);
 if($('#adminSearch')) $('#adminSearch').addEventListener('input', e => {
   adminFilter = e.target.value || '';
   adminRender();
@@ -6273,7 +6614,7 @@ function speakWord(txt){
         else playTTS(t, lang);          // 没装这门语言的发音包，就走联网音频
       };
       try{ synth.onvoiceschanged = fire; }catch(e){}
-      setTimeout(fire, 1200);
+      setTimeout(fire, 500);
       return;
     }
     if(!pickVoice(lang)){ playTTS(t, lang); return; }
@@ -8740,10 +9081,32 @@ renderMenu();
 if(currentUser) loadProfile(currentUser);
 if(currentUser){ startBgSync(); setTimeout(bgSyncOnce, 1500); }
 renderMenu();
-$('#loginCancel').classList.toggle('hidden', !currentUser || !!lockOf(currentUser));
+const canResume = !!currentUser && !lockOf(currentUser);
+$('#loginCancel').classList.toggle('hidden', !canResume);
 $('#loginName').value = currentUser || '';
-showView($('#viewLogin'));
-setTimeout(() => $('#loginName').focus(), 300);
+if(canResume){
+  // 刷新 / 重新打开：直接回到上次所在的页面，不再退回登录页
+  restoreView();
+}else{
+  showView($('#viewLogin'));
+  setTimeout(() => $('#loginName').focus(), 300);
+}
+if(currentUser){
+  updateSocialBadge();
+  setTimeout(() => refreshSocialFromCloud(false), 900);
+  setTimeout(sqFlush, 2600);
+}
+setInterval(() => { if(currentUser && !document.hidden) refreshSocialFromCloud(false); }, 90000);
+
+/* 朗读引擎预热：多数浏览器第一次 getVoices() 是空的，这里提前触发，点朗读时不必再等 */
+try{
+  if(window.speechSynthesis){
+    window.speechSynthesis.getVoices();
+    window.speechSynthesis.addEventListener('voiceschanged', () => {
+      try{ window.speechSynthesis.getVoices(); }catch(e){}
+    });
+  }
+}catch(e){}
 </script>
 </body>
 </html>
