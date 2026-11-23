@@ -1046,9 +1046,33 @@
     font-size:9.5px;border-radius:9px;padding:2px 7px;
   }
   .chat-sheet{max-height:90vh;}
+  /* 聊天是独立界面：整屏铺开，底部留出输入栏 */
+  .chat-page{
+    min-height:100%;display:flex;flex-direction:column;
+    background:#fbfbf7;
+  }
+  .chat-page-head{
+    display:flex;align-items:center;gap:10px;
+    padding:14px 18px 12px;border-bottom:1px solid var(--line);
+    background:#fbfbf7;position:sticky;top:0;z-index:3;
+  }
+  .chat-back{
+    border:none;background:transparent;color:var(--soft);
+    font-size:12px;letter-spacing:.04em;padding:4px 2px;cursor:pointer;
+  }
+  .chat-back:hover{color:var(--accent);}
+  .chat-page-head h3{
+    margin:0;flex:1 1 auto;text-align:center;
+    font-size:14.5px;font-weight:600;color:var(--ink);
+  }
+  .chat-head-gap{width:52px;flex:0 0 auto;}
+  .chat-page-body{
+    flex:1 1 auto;display:flex;flex-direction:column;gap:10px;
+    padding:14px 18px 18px;overflow:hidden;
+  }
   .chat-body{display:flex;flex-direction:column;gap:10px;overflow:hidden;}
   .chat-log{
-    flex:1 1 auto;max-height:50vh;min-height:120px;overflow:auto;
+    flex:1 1 auto;max-height:none;min-height:120px;overflow:auto;
     display:flex;flex-direction:column;gap:9px;padding:2px;
   }
   .chat-empty{font-size:11.5px;color:var(--faint);text-align:center;padding:28px 0;}
@@ -1504,6 +1528,7 @@
       <button class="seg-btn on" data-seg="friend" type="button">好友</button>
       <button class="seg-btn" data-seg="group" type="button">群聊</button>
       <button class="seg-btn" data-seg="meet" type="button">交友<span class="seg-dot" id="meetDot">0</span></button>
+      <button class="seg-btn" data-seg="admin" type="button">管理员</button>
     </div>
 
     <div id="paneFriend">
@@ -1538,6 +1563,17 @@
       <div id="meetInList"></div>
       <div class="sec-head" style="margin-top:14px;"><h2>发出的申请</h2><span class="note" id="meetOutNote">—</span></div>
       <div id="meetOutList"></div>
+    </div>
+
+    <div id="paneAdmin" class="hidden">
+      <div class="sec-head" style="margin-top:4px;">
+        <h2>管理员</h2>
+        <span class="note" id="adminNoteLine">负责账号安全与数据治理</span>
+      </div>
+      <div id="adminList"></div>
+      <div class="hint-mini" id="adminHint" style="margin:10px 2px 0;font-size:10.5px;color:#b0b0a6;">
+        管理员能注销违规账号、清理失效记录；有问题可以直接和他对话。
+      </div>
     </div>
   </div>
 </div>
@@ -2169,14 +2205,15 @@
   </div>
 </div>
 
-<!-- ============== 好友聊天 ============== -->
-<div class="modal hidden" id="chatModal">
-  <div class="sheet chat-sheet">
-    <div class="sheet-head">
+<!-- ============== 好友聊天（独立界面，不再弹窗） ============== -->
+<div class="view hidden" id="viewChat">
+  <div class="chat-page">
+    <div class="chat-page-head">
+      <button class="chat-back" id="closeChat" type="button" aria-label="返回">‹ 返回</button>
       <h3 id="chatTitle">聊天</h3>
-      <button class="close-x" id="closeChat" aria-label="关闭">×</button>
+      <span class="chat-head-gap"></span>
     </div>
-    <div class="sheet-body chat-body">
+    <div class="chat-page-body">
       <div class="chat-log" id="chatLog"></div>
       <div class="chat-tools">
         <button class="btn-line" id="shareSet">分享知识库</button>
@@ -3798,6 +3835,8 @@ function enterAccount(name, cloudData){
   showView($('#viewMenu'));
   startBgSync();
   setTimeout(bgSyncOnce, 20000);
+  // 登录后确保突触码存在（老账号没生成过就补一个，并写进云端映射）
+  setTimeout(() => { try{ ensureSynapse().then(() => updateSynapseUI()).catch(() => {}); }catch(e){} }, 400);
   // 登录后顺手核对一下有没有好友改了名（不会多出一个号）
   setTimeout(() => { try{ sweepFriendRenames(); }catch(e){} }, 3000);
   // 登入时检查是否有别台设备正在使用同一个名字
@@ -4302,6 +4341,20 @@ async function doLogin(){
     const renamedTo = cloudData ? renameTargetOf(cloudData) : '';
     if(renamedTo && renamedTo !== raw && renameHop < 3){
       renameHop++;
+      // 本机用旧名字存过档：并到新名字下，别留一份孤立档案
+      try{
+        const oldLocal = readProfile(raw);
+        const curLocal = readProfile(renamedTo);
+        if(oldLocal){
+          const merged = curLocal ? mergeData(curLocal, oldLocal) : oldLocal;
+          localStorage.setItem(profileKey(renamedTo), JSON.stringify(Object.assign({}, merged, { savedAt: Date.now() })));
+          localStorage.removeItem(profileKey(raw));
+        }
+        const users = listUsers().filter(u => normName(u) !== normName(raw));
+        if(users.indexOf(renamedTo) < 0) users.push(renamedTo);
+        localStorage.setItem(USERS_KEY, JSON.stringify(users));
+        localStorage.setItem(CURRENT_KEY, renamedTo);
+      }catch(e){}
       $('#loginName').value = renamedTo;
       btn.disabled = false;
       toast('「' + raw + '」已改名为「' + renamedTo + '」，正在用新名字登录', 2200);
@@ -4621,7 +4674,7 @@ function currentViewId(){
 }
 function persistView(){
   const id = currentViewId();
-  if(!id || id === 'viewLogin') return;
+  if(!id || id === 'viewLogin' || id === 'viewChat') return;   // 聊天界面不记成落地页
   try{
     localStorage.setItem(VIEW_KEY, JSON.stringify({
       id: id,
@@ -4998,7 +5051,7 @@ if($('#dstInput')) $('#dstInput').addEventListener('input', (e) => { transitTarg
 if($('#transitGo')) $('#transitGo').addEventListener('click', runTransit);
 
 /* ================== 视窗：好友 / 聊天 / 分享 ================== */
-const chatModal = $('#chatModal');
+const chatModal = $('#viewChat');
 const sharePickModal = $('#sharePickModal');
 let chatFriend = '';
 let chatGroupId = '';
@@ -5245,12 +5298,74 @@ function setSocialTab(tab){
   $('#socialSeg').querySelectorAll('.seg-btn').forEach(b => {
     b.classList.toggle('on', b.dataset.seg === tab);
   });
-  const f = $('#paneFriend'), g = $('#paneGroup'), m = $('#paneMeet');
+  const f = $('#paneFriend'), g = $('#paneGroup'), m = $('#paneMeet'), a = $('#paneAdmin');
   if(f) f.classList.toggle('hidden', tab !== 'friend');
   if(g) g.classList.toggle('hidden', tab !== 'group');
   if(m) m.classList.toggle('hidden', tab !== 'meet');
+  if(a) a.classList.toggle('hidden', tab !== 'admin');
   if(tab === 'group') renderGroups();
   if(tab === 'meet') renderMeet();
+  if(tab === 'admin') renderAdminPane();
+}
+
+/* ---------- 管理员：与好友同级的独立栏 ---------- */
+let adminCodeCache = '';
+async function renderAdminPane(){
+  const box = $('#adminList');
+  if(!box) return;
+  const name = (typeof ADMIN_NAME === 'string' ? ADMIN_NAME : '木泽');
+  let code = adminCodeCache;
+  if(!code){
+    try{
+      const row = await cloudPull(name);
+      const d = row ? parseCloudPayload(row.payload) : null;
+      code = (d && d.meta && d.meta.synapse) || '';
+      if(code) adminCodeCache = code;
+    }catch(e){}
+  }
+  const isFriend = social().friends.includes(name);
+  box.innerHTML = '';
+  const row = document.createElement('div');
+  row.className = 'friend-row';
+  row.innerHTML =
+    '<div class="av">管</div>' +
+    '<div class="who"><div class="nm">' + escapeHtml(name) + ' · 管理员</div>' +
+      '<div class="sub">' + (code ? ('突触 ' + code + ' · 系统安全员') : '系统安全员') + '</div></div>';
+  const btn = document.createElement('button');
+  btn.className = 'btn-line';
+  btn.style.padding = '7px 13px';
+  btn.style.fontSize = '11px';
+  if(isFriend){
+    btn.textContent = '发消息';
+    btn.addEventListener('click', () => openChat(name));
+  }else{
+    btn.textContent = '加为好友';
+    btn.addEventListener('click', async () => {
+      if(!code){
+        // 抓不到编码就让用户手输
+        $('#friendInput').value = '';
+        setSocialTab('meet');
+        toast('把管理员的突触码输入到交友页的输入框');
+        return;
+      }
+      $('#friendInput').value = code;
+      setSocialTab('meet');
+      addFriend();
+    });
+  }
+  row.appendChild(btn);
+  box.appendChild(row);
+
+  if(isAdmin()){
+    const me = document.createElement('div');
+    me.className = 'hint-mini';
+    me.style.margin = '10px 2px 0';
+    me.style.fontSize = '10.5px';
+    me.textContent = '你是管理员：注销账号、清理记录在「我的 → 安全员面板」。';
+    box.appendChild(me);
+  }
+  const line = $('#adminNoteLine');
+  if(line) line.textContent = isAdmin() ? '你当前就是管理员' : '负责账号安全与数据治理';
 }
 
 function renderGroups(){
@@ -5642,8 +5757,7 @@ function openChat(name){
   $('#chatTitle').textContent = chatTitleOf(name);
   $('#chatText').value = '';
   chatView = [];
-  chatModal.classList.remove('hidden');
-  requestAnimationFrame(() => chatModal.classList.add('show'));
+  showView(chatModal);          // 打开独立的聊天界面，不再弹窗
   loadChat();
   clearInterval(chatTimer);
   chatTimer = setInterval(loadChat, 15000);
@@ -5657,8 +5771,7 @@ function openGroupChat(gid){
   $('#chatTitle').textContent = g.name + ' · ' + (g.members || []).length + ' 人';
   $('#chatText').value = '';
   chatView = [];
-  chatModal.classList.remove('hidden');
-  requestAnimationFrame(() => chatModal.classList.add('show'));
+  showView(chatModal);
   loadChat();
   clearInterval(chatTimer);
   chatTimer = setInterval(loadChat, 15000);
@@ -5666,12 +5779,13 @@ function openGroupChat(gid){
 
 function closeChat(){
   stopVoice();
-  chatModal.classList.remove('show');
   clearInterval(chatTimer);
   chatTimer = null;
-  setTimeout(() => chatModal.classList.add('hidden'), 220);
   chatFriend = '';
   chatGroupId = '';
+  // 回到视窗页（不重新拉云端，保持原样的列表）
+  try{ renderSocial(); }catch(e){}
+  showView($('#viewBooks'));
 }
 
 /* ---------- 好友备注：只在本机显示 ---------- */
@@ -5742,6 +5856,19 @@ async function doRename(){
       const target = full ? renameTargetOf(full.data) : '';
       if(target !== currentUser){ toast('「' + nu + '」已经被别人用了，换一个'); return; }
     }
+    // 只差大小写的名字也算重名，避免出现 Eva / eva 两个号
+    let ciTaken = '';
+    try{
+      const txt = await cloudReq('GET', '/rest/v1/shiwang_profiles?username=ilike.' + encodeURIComponent(nu) + '&select=username', null, null, 1);
+      let rows = []; try{ rows = JSON.parse(txt || '[]'); }catch(e){ rows = []; }
+      rows.forEach(r => {
+        const x = (r && r.username) || '';
+        if(!x || x === nu) return;
+        if(x === currentUser) return;
+        if(x.toLowerCase() === nu.toLowerCase()) ciTaken = x;
+      });
+    }catch(e){}
+    if(ciTaken){ toast('「' + ciTaken + '」和这个名字只差大小写，换一个'); return; }
 
     const old = currentUser;
     // 自己的聊天记录里，署的旧名字一起换成新名字（要在做快照之前改，才会同步到云端）
@@ -5764,6 +5891,17 @@ async function doRename(){
       g.members = (g.members || []).map(x => x === old ? nu : x);
       if(g.owner === old) g.owner = nu;
     });
+    // 申请、邀请、处理记录、管理员备注里对“我”的引用也换成新名字
+    s.sreq = (s.sreq || []).map(r => (r.to === old) ? Object.assign({}, r, { to: nu }) : r);
+    s.rlog = (s.rlog || []).map(r => (r.from === old) ? Object.assign({}, r, { from: nu }) : r);
+    (s.greq || []).forEach(g => { if(g.from === old) g.from = nu; if(g.to === old) g.to = nu; });
+    try{
+      const m = metaEnsure();
+      if(m.adminNotes && m.adminNotes[old]){
+        m.adminNotes[nu] = m.adminNotes[old];
+        delete m.adminNotes[old];
+      }
+    }catch(e){}
 
     const pushed = await cloudPush(nu, snap);
     if(pushed){
@@ -7171,7 +7309,7 @@ if($('#chatText')) $('#chatText').addEventListener('keydown', e => {
 if($('#shareSet')) $('#shareSet').addEventListener('click', () => openSharePick('set'));
 if($('#shareWords')) $('#shareWords').addEventListener('click', () => openSharePick('words'));
 if($('#closeSharePick')) $('#closeSharePick').addEventListener('click', closeSharePick);
-if(chatModal) chatModal.addEventListener('click', e => { if(e.target === chatModal) closeChat(); });
+
 if(sharePickModal) sharePickModal.addEventListener('click', e => { if(e.target === sharePickModal) closeSharePick(); });
 
 /* ---------- 语音消息：边说边转文字 ---------- */
