@@ -5432,11 +5432,23 @@ async function renderAdminPane(){
   const s = social();
   // 管理员这栏：普通用户发来的消息（存在 adminChats，和好友聊天不交叉）
   if(isAdmin()){
-    if(line) line.textContent = '用户发来的工作消息';
-    const names = Object.keys(s.adminChats || {}).filter(n => (s.adminChats[n] || []).length);
+    if(line) line.textContent = '用户发来的工作消息 · 也可发飞信';
+    const names = Object.keys(s.adminChats || {}).filter(n => (s.adminChats[n] || []).length && n !== BROADCAST_NAME);
     const hint = $('#adminHint');
+    box.innerHTML = '';
+    // 飞信固定置顶：一条消息发出去，所有普通用户的管理员栏都会收到
+    const bRow = document.createElement('div');
+    bRow.className = 'friend-row';
+    const bList = s.adminChats[BROADCAST_NAME] || [];
+    const bLast = bList.length ? bList[bList.length - 1] : null;
+    bRow.innerHTML =
+      '<span class="av">信</span>' +
+      '<span class="who"><span class="nm">' + escapeHtml(BROADCAST_NAME) + '</span>' +
+        '<div class="sub">' + escapeHtml(bLast ? (bLast.text || '[消息]').slice(0, 18) : '发给所有普通用户') + '</div></span>';
+    bRow.addEventListener('click', () => openAdminChat(BROADCAST_NAME));
+    box.appendChild(bRow);
+
     if(!names.length){
-      box.innerHTML = '';
       if(hint) hint.style.display = 'none';
       return;
     }
@@ -5890,11 +5902,18 @@ function openAdminChat(peer){
   chatGroupId = '';
   chatAdminPeer = peer || 'admin';
   chatModal.classList.add('admin-mode');
-  $('#chatTitle').textContent = isAdmin() ? displayName(peer) : ADMIN_DISPLAY;
+  const isBroadcast = (chatAdminPeer === BROADCAST_NAME);
+  $('#chatTitle').textContent = isBroadcast
+    ? (BROADCAST_NAME + ' · 所有普通用户')
+    : (isAdmin() ? displayName(peer) : ADMIN_DISPLAY);
   $('#chatText').value = '';
   chatView = [];
   const av = $('#chatAvatar');
-  if(av){ av.classList.add('ghost'); av.textContent = '管'; av.title = '管理员 · 系统身份，不可删除'; }
+  if(av){
+    av.classList.add('ghost');
+    av.textContent = isBroadcast ? '信' : '管';
+    av.title = isBroadcast ? '发给所有普通用户' : '管理员 · 系统身份，不可删除';
+  }
   showView(chatModal);
   loadChat();
   clearInterval(chatTimer);
@@ -6163,6 +6182,7 @@ if($('#meSyCode')) $('#meSyCode').addEventListener('click', copySynapse);
 /* ---------- 安全员：最高权限面板（仅「木泽」可见） ---------- */
 const ADMIN_NAME = '木泽';
 const ADMIN_DISPLAY = 'SightNote';
+const BROADCAST_NAME = '飞信';   // 管理员专用：发给所有普通用户的渠道
 
 /* 已被注销的名字（云端真删没有权限时用墓碑，这份名单让本机面板不再显示它们） */
 const TOMB_KEY = 'sww-admin-tomb';
@@ -7215,14 +7235,18 @@ async function loadAdminChat(){
   const myKey = isAdmin() ? chatAdminPeer : 'admin';
   const remoteName = isAdmin() ? chatAdminPeer : ADMIN_NAME;
   const remoteKey = isAdmin() ? 'admin' : currentUser;
+  // 飞信只在管理员本机留档，不读别人档案
+  const isBroadcast = (chatAdminPeer === BROADCAST_NAME);
   const local = (social().adminChats[myKey] || []).slice();
   let remote = [];
-  try{
-    const row = await cloudPull(remoteName);
-    const d = row ? parseCloudPayload(row.payload) : readProfile(remoteName);
-    const s = d ? normSocial(d.social) : null;
-    remote = (s && Array.isArray(s.adminChats[remoteKey])) ? s.adminChats[remoteKey] : [];
-  }catch(e){}
+  if(!isBroadcast){
+    try{
+      const row = await cloudPull(remoteName);
+      const d = row ? parseCloudPayload(row.payload) : readProfile(remoteName);
+      const s = d ? normSocial(d.social) : null;
+      remote = (s && Array.isArray(s.adminChats[remoteKey])) ? s.adminChats[remoteKey] : [];
+    }catch(e){}
+  }
   const seen = new Set();
   chatView = [];
   local.concat(remote).forEach(m => {
@@ -7433,7 +7457,8 @@ function pushChat(m){
     chatView.push(m);
     save();
     renderChat();
-    deliverAdminMsg(m);
+    if(chatAdminPeer === BROADCAST_NAME && isAdmin()) broadcastToUsers(m);
+    else deliverAdminMsg(m);
     return;
   }
   if(!chatFriend) return;
@@ -7461,6 +7486,35 @@ async function deliverAdminMsg(m){
     await cloudPutRaw(target, d);
     if(!isAdmin()) adminCodeCache = (d.meta && d.meta.synapse) || adminCodeCache;
   }catch(e){}
+}
+
+/* 飞信：管理员以 SightNote 身份群发给所有普通用户，各家在「管理员」栏收到 */
+async function broadcastToUsers(m){
+  let names = [];
+  try{
+    const res = await cloudUserList();
+    names = (res.users || []).map(u => u.username)
+      .filter(n => n && n !== ADMIN_NAME && n !== currentUser && n !== BROADCAST_NAME);
+  }catch(e){ return; }
+  let idx = 0;
+  const worker = async () => {
+    while(idx < names.length){
+      const n = names[idx++];
+      try{
+        const row = await cloudPull(n);
+        const d = row ? parseCloudPayload(row.payload) : null;
+        if(!d) continue;
+        d.social = normSocial(d.social);
+        const list = (d.social.adminChats['admin'] = d.social.adminChats['admin'] || []);
+        const k = msgKey(m);
+        if(!list.some(x => msgKey(x) === k)) list.push(m);
+        list.sort((a, b) => (a.at || 0) - (b.at || 0));
+        if(d.social.adminRead) delete d.social.adminRead['admin'];
+        await cloudPutRaw(n, d);
+      }catch(e){}
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
 }
 
 /* 兼容旧调用：一律走管理员通道 */
