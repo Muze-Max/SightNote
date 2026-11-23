@@ -5365,6 +5365,16 @@ async function renderAdminPane(){
   const box = $('#adminList');
   if(!box) return;
   const name = (typeof ADMIN_NAME === 'string' ? ADMIN_NAME : '木泽');
+  const line = $('#adminNoteLine');
+  // 管理员看自己这栏：不显示“自己加自己”的卡片，只留一句入口提示
+  if(isAdmin()){
+    if(line) line.textContent = '你当前就是管理员';
+    box.innerHTML = '<div class="transit-empty">你是管理员：注销账号、清理记录在「我的 → 安全员面板」。</div>';
+    const hint = $('#adminHint'); if(hint) hint.style.display = 'none';
+    return;
+  }
+  const hint = $('#adminHint'); if(hint) hint.style.display = '';
+  if(line) line.textContent = '负责账号安全与数据治理';
   let code = adminCodeCache;
   if(!code){
     try{
@@ -5406,17 +5416,6 @@ async function renderAdminPane(){
   }
   row.appendChild(btn);
   box.appendChild(row);
-
-  if(isAdmin()){
-    const me = document.createElement('div');
-    me.className = 'hint-mini';
-    me.style.margin = '10px 2px 0';
-    me.style.fontSize = '10.5px';
-    me.textContent = '你是管理员：注销账号、清理记录在「我的 → 安全员面板」。';
-    box.appendChild(me);
-  }
-  const line = $('#adminNoteLine');
-  if(line) line.textContent = isAdmin() ? '你当前就是管理员' : '负责账号安全与数据治理';
 }
 
 function renderGroups(){
