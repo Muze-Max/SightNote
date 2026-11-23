@@ -744,6 +744,29 @@
   .row-item .rm:hover{color:var(--warn);}
   .set-tools{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 14px;}
   .set-tools .btn-line{padding:7px 13px;font-size:11px;}
+  .set-tools .multi-btn{margin-left:auto;border-color:#cfdcd3;color:#5d7a67;}
+  .set-tools .multi-btn.on{background:#eef4ef;border-color:var(--accent);color:#2f4438;font-weight:600;}
+  .batch-bar{
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    padding:9px 12px;margin:0 0 12px;border:1px solid #dfe8e2;border-radius:12px;background:#f7faf8;
+    font-size:11.5px;color:#4e5a53;
+  }
+  .batch-bar.hidden{display:none;}
+  .batch-all{display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:#3f5147;}
+  .batch-all input{width:14px;height:14px;margin:0;accent-color:#3f6b52;}
+  .batch-n{color:var(--faint);font-size:11px;}
+  .batch-act{
+    border:1px solid #dfe8e2;background:#fff;border-radius:8px;
+    padding:5px 12px;font-size:11.5px;color:#4e5a53;cursor:pointer;
+  }
+  .batch-act:hover{border-color:var(--accent);color:var(--accent);}
+  .batch-act.danger:hover{border-color:var(--warn);color:var(--warn);}
+  .row-item .sel{display:flex;align-items:center;flex:0 0 auto;padding-top:2px;}
+  .row-item .sel input{width:14px;height:14px;margin:0;accent-color:#3f6b52;}
+  .row-item.picked{background:#f4f9f5;}
+  .set-row.child{padding-left:26px;}
+  .set-row .tree-mark{color:#c9d3cc;font-size:11px;margin-right:-4px;flex:0 0 auto;}
+  .set-row{position:relative;}
   .row-item .acts{display:flex;flex:0 0 auto;gap:1px;}
   .row-item .acts button{
     border:0;background:none;color:#a7a79d;cursor:pointer;
@@ -1413,6 +1436,7 @@
         <h2>知识库</h2>
         <div class="sec-right">
           <span class="note" id="setNote">选择要练习的内容</span>
+          <button class="net-btn" id="newSetBtn" title="新建一个知识库（可归到某个知识库下面）">＋ 新建</button>
           <button class="net-btn" id="openTransit" title="在用户之间迁移知识库">视途</button>
         </div>
       </div>
@@ -1691,7 +1715,16 @@
       <button class="btn-line" id="addItem">＋ 添加词条</button>
       <button class="btn-line" id="renameSet">重命名</button>
       <button class="btn-line" id="exportSetPDF">移民 · 导出为 PDF</button>
+      <button class="btn-line" id="setMove">移入知识库</button>
       <button class="btn-line" id="deleteSet">删除知识库</button>
+      <button class="btn-line multi-btn" id="setMulti">多选</button>
+    </div>
+    <div class="batch-bar hidden" id="batchBar">
+      <label class="batch-all"><input type="checkbox" id="batchAll" spellcheck="false"><span id="batchAllTxt">全选</span></label>
+      <span class="batch-n" id="batchN">已选 0 条</span>
+      <button class="batch-act" data-batch="edit">改</button>
+      <button class="batch-act" data-batch="move">移</button>
+      <button class="batch-act danger" data-batch="del">删</button>
     </div>
     <div id="setRows"></div>
   </div>
@@ -1843,6 +1876,57 @@
       <p class="format-tip" id="moveInfo"></p>
       <div class="field-line"><select id="moveTarget"></select></div>
       <button class="btn-line" id="doMove" style="margin-top:14px;">转移</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============== 知识库层级：把整个知识库移入另一个 ============== -->
+<div class="modal hidden" id="setMoveModal">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h3>移入知识库</h3>
+      <button class="close-x" id="closeSetMove" aria-label="关闭">×</button>
+    </div>
+    <div class="sheet-body">
+      <p class="format-tip" id="setMoveInfo"></p>
+      <div class="field-line"><select id="setMoveTarget"></select></div>
+      <p class="format-tip">移入后它会作为子知识库显示在目标下面，词条和开关都不变。</p>
+      <button class="btn-line" id="doSetMove" style="margin-top:14px;">移入</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============== 新建知识库（可指定归属） ============== -->
+<div class="modal hidden" id="newSetModal">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h3>新建知识库</h3>
+      <button class="close-x" id="closeNewSet" aria-label="关闭">×</button>
+    </div>
+    <div class="sheet-body">
+      <div class="field-line"><input id="nsName" maxlength="40" placeholder="知识库名称" spellcheck="false" autocomplete="off"></div>
+      <div class="field-line" style="margin-top:10px;"><input id="nsDesc" maxlength="60" placeholder="一句话说明（可不填）" spellcheck="false" autocomplete="off"></div>
+      <div class="field-line" style="margin-top:10px;"><select id="nsParent"></select></div>
+      <button class="btn-line" id="doNewSet" style="margin-top:14px;">创建</button>
+      <p class="format-tip">选一个上级知识库，它就会成为子知识库；选「顶层」则和现在一样并列。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============== 批量修改词条 ============== -->
+<div class="modal hidden" id="batchEditModal">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h3>批量修改</h3>
+      <button class="close-x" id="closeBatchEdit" aria-label="关闭">×</button>
+    </div>
+    <div class="sheet-body">
+      <p class="format-tip" id="batchEditInfo"></p>
+      <div class="field-line" style="margin-top:10px;"><select id="bePos"><option value="">词性：不改</option><option value="n.">n. 名词</option><option value="v.">v. 动词</option><option value="adj.">adj. 形容词</option><option value="adv.">adv. 副词</option><option value="phr.">phr. 短语</option><option value="sent.">sent. 句子</option></select></div>
+      <div class="field-line" style="margin-top:10px;"><input id="beRoot" maxlength="40" placeholder="词根：不改就留空" spellcheck="false"></div>
+      <div class="field-line" style="margin-top:10px;"><select id="beType"><option value="">类型：不改</option><option value="word">单词</option><option value="phrase">短语</option><option value="sentence">句子</option></select></div>
+      <button class="btn-line" id="doBatchEdit" style="margin-top:14px;">应用到选中的词条</button>
+      <p class="format-tip">只会改你填了的项；留空表示保持原样。</p>
     </div>
   </div>
 </div>
@@ -4333,8 +4417,8 @@ $('#ttDoImport').addEventListener('click', async () => {
 const hiddenSetIds = () => Array.isArray(state.hiddenSets) ? state.hiddenSets : [];
 const allSets = () => BUILTIN
   .filter(s => hiddenSetIds().indexOf(s.id) < 0)
-  .map(s => Object.assign({}, s, { items: s.items.map(it => withEdits(it)) }))
-  .concat(state.customSets.map(s => Object.assign({builtin:false}, s)));
+  .map(s => Object.assign({}, s, { parent: s.parent || '', items: s.items.map(it => withEdits(it)) }))
+  .concat(state.customSets.map(s => Object.assign({builtin:false, parent: s.parent || ''}, s)));
 const getSetById = (id) => allSets().find(s => s.id === id) || null;
 const isOn = (id) => state.enabled[id] !== false;
 const keyOf = (it) => (it.en || '').toLowerCase().replace(/\s+/g,' ').trim();
@@ -7048,25 +7132,72 @@ if($('#createGroup')) $('#createGroup').addEventListener('click', createGroup);
 if(groupModal) groupModal.addEventListener('click', e => { if(e.target === groupModal) closeGroupModal(); });
 
 /* ================== 菜单渲染 ================== */
+function setTree(){
+  const list = allSets();
+  const ids = new Set(list.map(s => s.id));
+  const children = new Map();
+  list.forEach(s => {
+    const p = (s.parent && ids.has(s.parent) && s.parent !== s.id) ? s.parent : '';
+    if(!children.has(p)) children.set(p, []);
+    children.get(p).push(s);
+  });
+  return { list, children, ids };
+}
+function setDescendants(id){
+  const { children } = setTree();
+  const out = new Set();
+  const walk = pid => {
+    (children.get(pid) || []).forEach(c => {
+      if(out.has(c.id)) return;
+      out.add(c.id);
+      walk(c.id);
+    });
+  };
+  walk(id);
+  return out;
+}
+function setDepthOf(id){
+  const { list } = setTree();
+  let depth = 0, cur = list.find(s => s.id === id);
+  const guard = new Set();
+  while(cur && cur.parent && !guard.has(cur.id)){
+    guard.add(cur.id);
+    const p = list.find(s => s.id === cur.parent);
+    if(!p) break;
+    depth++; cur = p;
+  }
+  return depth;
+}
+
 function renderMenu(){
   const list = $('#setList');
   list.innerHTML = '';
-  allSets().forEach(set => {
+  const { children } = setTree();
+  const drawn = new Set();
+
+  const addRow = (set, depth) => {
+    if(drawn.has(set.id) || depth > 4) return;
+    drawn.add(set.id);
     const on = isOn(set.id);
     const li = document.createElement('li');
-    li.className = 'set-row' + (on ? ' on' : '');
+    li.className = 'set-row' + (on ? ' on' : '') + (depth ? ' child' : '');
     li.dataset.id = set.id;
+    if(depth) li.dataset.depth = String(depth);
+    if(depth) li.style.paddingLeft = (22 + depth * 18) + 'px';
     li.innerHTML =
+      (depth ? '<span class="tree-mark">└</span>' : '') +
       '<span class="check"></span>' +
       '<span class="set-meta">' +
         '<span class="set-name">' + escapeHtml(set.name) + '</span>' +
         '<span class="set-sub"><span class="tag">' + (set.items[0] ? typeLabel(set.items[0].type) : '内容') + '</span>' +
-        set.items.length + ' 条 · ' + escapeHtml(set.desc || '') + '</span>' +
+        set.items.length + ' 条' + (set.desc ? ' · ' + escapeHtml(set.desc) : '') + '</span>' +
       '</span>' +
       '<button class="edit" title="管理">⋯</button>' +
       '<button class="del" title="删除">×</button>';
     list.appendChild(li);
-  });
+    (children.get(set.id) || []).forEach(c => addRow(c, depth + 1));
+  };
+  (children.get('') || []).forEach(s => addRow(s, 0));
 
   $('#meName').textContent = currentUser || '未登录';
   $('#meAvatar').textContent = currentUser ? currentUser.slice(0,1) : '—';
@@ -7185,7 +7316,9 @@ $('#startStudy').addEventListener('click', () => {
 /* ================== 知识库管理 ================== */
 let manageSetId = '';
 let editingIndex = -1;
-let movingIndex = -1;
+let movingIdxs = [];
+let setSelOn = false;
+const setPicked = new Set();
 
 function deleteSetById(id){
   const set = getSetById(id);
@@ -7217,6 +7350,7 @@ function ensureEditableSet(){ return editableSetById(manageSetId); }
 function openSetManager(id){
   const set = getSetById(id);
   if(!set){ toast('这个知识库不存在'); return; }
+  if(manageSetId !== id){ setPicked.clear(); setSelOn = false; }
   manageSetId = id;
   $('#setSearch').value = '';
   renderSetView();
@@ -7228,30 +7362,60 @@ function renderSetView(){
   if(!set){ showView($('#viewMenu')); return; }
   $('#setTitle').textContent = set.name;
   $('#setCount').textContent = set.items.length + ' 条';
-  $('#setModeLabel').textContent = set.builtin ? '默认知识库 · 可改可删' : (set.desc || '自建知识库');
+  const parentSet = set.parent ? getSetById(set.parent) : null;
+  $('#setModeLabel').textContent = (set.builtin ? '默认知识库 · 可改可删' : (set.desc || '自建知识库'))
+    + (parentSet ? ' · 属于「' + parentSet.name + '」' : '');
   const q = $('#setSearch').value.trim().toLowerCase();
   const box = $('#setRows');
   box.innerHTML = '';
+
+  // 只保留还存在的选中项
+  Array.from(setPicked).forEach(i => { if(!set.items[i]) setPicked.delete(i); });
+
+  const shownIdx = [];
+  set.items.forEach((it, idx) => {
+    if(q && !(it.en + ' ' + (it.zh || '')).toLowerCase().includes(q)) return;
+    shownIdx.push(idx);
+  });
+
+  $('#setMulti').classList.toggle('on', setSelOn);
+  $('#setMulti').textContent = setSelOn ? '退出多选' : '多选';
+  const bar = $('#batchBar');
+  bar.classList.toggle('hidden', !setSelOn);
+  if(setSelOn){
+    const allOn = shownIdx.length > 0 && shownIdx.every(i => setPicked.has(i));
+    $('#batchAll').checked = allOn;
+    $('#batchAllTxt').textContent = allOn ? '取消全选' : '全选';
+    $('#batchN').textContent = '已选 ' + setPicked.size + ' 条';
+    ['edit', 'move', 'del'].forEach(a => {
+      const b = bar.querySelector('.batch-act[data-batch="' + a + '"]');
+      if(b) b.disabled = setPicked.size === 0;
+    });
+  }
+
   if(!set.items.length){
     box.innerHTML = '<div class="empty">这个知识库还是空的</div>';
     return;
   }
-  let shown = 0;
-  set.items.forEach((it, idx) => {
-    if(q && !(it.en + ' ' + (it.zh || '')).toLowerCase().includes(q)) return;
-    shown++;
+  if(!shownIdx.length){ box.innerHTML = '<div class="empty">没有匹配的条目</div>'; return; }
+
+  const frag = document.createDocumentFragment();
+  shownIdx.forEach(idx => {
+    const it = set.items[idx];
     const row = document.createElement('div');
-    row.className = 'row-item';
+    const picked = setPicked.has(idx);
+    row.className = 'row-item' + (setSelOn && picked ? ' picked' : '');
     row.dataset.idx = idx;
     row.innerHTML =
+      (setSelOn ? '<label class="sel"><input type="checkbox" data-sel="' + idx + '"' + (picked ? ' checked' : '') + '></label>' : '') +
       '<div class="en">' + escapeHtml(it.en) + '</div>' +
       '<div class="zh">' + escapeHtml(it.zh || '') +
         (it.pos ? '<div class="si-meta">' + escapeHtml(it.pos) + '</div>' : '') +
       '</div>' +
-      '<div class="acts"><button data-act="edit">改</button><button data-act="move">移</button><button data-act="del" class="danger">删</button></div>';
-    box.appendChild(row);
+      (setSelOn ? '' : '<div class="acts"><button data-act="edit">改</button><button data-act="move">移</button><button data-act="del" class="danger">删</button></div>');
+    frag.appendChild(row);
   });
-  if(!shown) box.innerHTML = '<div class="empty">没有匹配的条目</div>';
+  box.appendChild(frag);
 }
 
 const itemModal = $('#itemModal');
@@ -7304,13 +7468,18 @@ function saveItemForm(){
   toast(added ? '已添加' : '已保存');
 }
 
-function openMoveModal(index){
+function openMoveModal(indexOrList){
   const set = getSetById(manageSetId);
-  if(!set || !set.items[index]) return;
+  if(!set) return;
+  const idxs = (Array.isArray(indexOrList) ? indexOrList : [indexOrList])
+    .map(Number).filter(i => set.items[i]);
+  if(!idxs.length) return;
   const targets = allSets().filter(s => s.id !== set.id);
   if(!targets.length){ toast('还没有其他知识库可以接收'); return; }
-  movingIndex = index;
-  $('#moveInfo').textContent = '把「' + set.items[index].en + '」从「' + set.name + '」转移到：';
+  movingIdxs = idxs;
+  $('#moveInfo').textContent = idxs.length === 1
+    ? '把「' + set.items[idxs[0]].en + '」从「' + set.name + '」转移到：'
+    : '把选中的 ' + idxs.length + ' 条从「' + set.name + '」转移到：';
   const sel = $('#moveTarget');
   sel.innerHTML = '';
   targets.forEach(t => {
@@ -7324,7 +7493,7 @@ function openMoveModal(index){
 }
 function closeMoveModal(){
   moveModal.classList.remove('show');
-  movingIndex = -1;
+  movingIdxs = [];
   setTimeout(() => moveModal.classList.add('hidden'), 220);
 }
 
@@ -7357,6 +7526,167 @@ $('#renameSet').addEventListener('click', () => {
   renderSetView();
   renderMenu();
   toast('已重命名');
+});
+
+/* ================== 知识库层级：新建 / 移入 / 多选 ================== */
+let batchEditIdxs = [];
+
+function fillParentSelect(sel, excludeId, topLabel){
+  const list = allSets();
+  const banned = excludeId ? setDescendants(excludeId) : new Set();
+  if(excludeId) banned.add(excludeId);
+  sel.innerHTML = '';
+  if(topLabel !== false){
+    const o = document.createElement('option');
+    o.value = '';
+    o.textContent = topLabel || '顶层（不归入任何知识库）';
+    sel.appendChild(o);
+  }
+  list.filter(s => !banned.has(s.id)).forEach(s => {
+    const o = document.createElement('option');
+    o.value = s.id;
+    o.textContent = s.name + (setDepthOf(s.id) > 0 ? '（子库）' : '');
+    sel.appendChild(o);
+  });
+}
+function showModal(m){ m.classList.remove('hidden'); requestAnimationFrame(() => m.classList.add('show')); }
+function hideModal(m){ m.classList.remove('show'); setTimeout(() => m.classList.add('hidden'), 220); }
+
+function openNewSetModal(){
+  fillParentSelect($('#nsParent'), '', '顶层（和现在一样并列）');
+  $('#nsName').value = '';
+  $('#nsDesc').value = '';
+  showModal($('#newSetModal'));
+  setTimeout(() => { try{ $('#nsName').focus(); }catch(e){} }, 120);
+}
+function doNewSet(){
+  const name = $('#nsName').value.replace(/\s+/g, ' ').trim();
+  if(!name){ toast('先给知识库起个名字'); return; }
+  if(allSets().some(s => s.name === name)){ toast('已经有同名知识库'); return; }
+  const id = 'set' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  state.customSets.push({
+    id, name, desc: $('#nsDesc').value.trim(),
+    items: [], parent: $('#nsParent').value || ''
+  });
+  save();
+  hideModal($('#newSetModal'));
+  renderMenu();
+  openSetManager(id);
+  toast('已新建「' + name + '」');
+}
+
+function openSetMoveModal(){
+  const set = getSetById(manageSetId);
+  if(!set) return;
+  $('#setMoveInfo').textContent = '把「' + set.name + '」整库移到一个知识库下面：';
+  fillParentSelect($('#setMoveTarget'), set.id, '顶层（取消归属）');
+  showModal($('#setMoveModal'));
+}
+function doSetMove(){
+  const ed = editableSetById(manageSetId);
+  if(!ed) return;
+  ed.parent = $('#setMoveTarget').value || '';
+  save();
+  hideModal($('#setMoveModal'));
+  renderSetView();
+  renderMenu();
+  const p = ed.parent ? getSetById(ed.parent) : null;
+  toast(p ? '已移入「' + p.name + '」' : '已移到顶层');
+}
+
+function openBatchEdit(idxs){
+  batchEditIdxs = idxs.slice();
+  if(!batchEditIdxs.length) return;
+  $('#batchEditInfo').textContent = '选中的 ' + batchEditIdxs.length + ' 条会一起修改。';
+  $('#bePos').value = '';
+  $('#beRoot').value = '';
+  $('#beType').value = '';
+  showModal($('#batchEditModal'));
+}
+
+$('#setMulti').addEventListener('click', () => {
+  setSelOn = !setSelOn;
+  if(!setSelOn) setPicked.clear();
+  renderSetView();
+});
+$('#setMove').addEventListener('click', openSetMoveModal);
+$('#newSetBtn').addEventListener('click', openNewSetModal);
+$('#closeSetMove').addEventListener('click', () => hideModal($('#setMoveModal')));
+$('#doSetMove').addEventListener('click', doSetMove);
+$('#closeNewSet').addEventListener('click', () => hideModal($('#newSetModal')));
+$('#doNewSet').addEventListener('click', doNewSet);
+$('#nsName').addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); doNewSet(); } });
+$('#closeBatchEdit').addEventListener('click', () => hideModal($('#batchEditModal')));
+$('#setMoveModal').addEventListener('click', e => { if(e.target === $('#setMoveModal')) hideModal($('#setMoveModal')); });
+$('#newSetModal').addEventListener('click', e => { if(e.target === $('#newSetModal')) hideModal($('#newSetModal')); });
+$('#batchEditModal').addEventListener('click', e => { if(e.target === $('#batchEditModal')) hideModal($('#batchEditModal')); });
+
+$('#setRows').addEventListener('change', (e) => {
+  const cb = e.target.closest('input[data-sel]');
+  if(!cb) return;
+  const idx = Number(cb.dataset.sel);
+  if(cb.checked) setPicked.add(idx); else setPicked.delete(idx);
+  renderSetView();
+});
+
+$('#batchAll').addEventListener('change', () => {
+  const set = getSetById(manageSetId);
+  if(!set) return;
+  const q = $('#setSearch').value.trim().toLowerCase();
+  const visible = [];
+  set.items.forEach((it, i) => {
+    if(q && !(it.en + ' ' + (it.zh || '')).toLowerCase().includes(q)) return;
+    visible.push(i);
+  });
+  if($('#batchAll').checked) visible.forEach(i => setPicked.add(i));
+  else setPicked.clear();
+  renderSetView();
+});
+
+$('#batchBar').addEventListener('click', (e) => {
+  const btn = e.target.closest('.batch-act');
+  if(!btn) return;
+  const act = btn.dataset.batch;
+  const set = getSetById(manageSetId);
+  if(!set) return;
+  const idxs = Array.from(setPicked).filter(i => set.items[i]);
+  if(!idxs.length){ toast('先勾选要处理的词条'); return; }
+  if(act === 'move'){ openMoveModal(idxs); return; }
+  if(act === 'edit'){ openBatchEdit(idxs); return; }
+  if(act === 'del'){
+    if(!confirm('删除选中的 ' + idxs.length + ' 条？')) return;
+    const ed = ensureEditableSet();
+    if(!ed) return;
+    idxs.slice().sort((a, b) => b - a).forEach(i => ed.items.splice(i, 1));
+    save();
+    setPicked.clear();
+    renderSetView();
+    renderMenu();
+    toast('已删除 ' + idxs.length + ' 条');
+  }
+});
+
+$('#doBatchEdit').addEventListener('click', () => {
+  const ed = ensureEditableSet();
+  if(!ed) return;
+  const pos = $('#bePos').value;
+  const root = $('#beRoot').value.trim();
+  const type = $('#beType').value;
+  const idxs = batchEditIdxs.filter(i => ed.items[i]);
+  if(!idxs.length){ hideModal($('#batchEditModal')); return; }
+  if(!pos && !root && !type){ toast('词性、词根、类型都没填，等于没改'); return; }
+  idxs.forEach(i => {
+    const it = ed.items[i];
+    if(pos) it.pos = pos;
+    if(root) it.root = root;
+    if(type) it.type = type;
+  });
+  save();
+  hideModal($('#batchEditModal'));
+  setPicked.clear();
+  renderSetView();
+  renderMenu();
+  toast('已修改 ' + idxs.length + ' 条');
 });
 
 /* 移民：把当前知识库排成一份可打印、可另存为 PDF 的版面 */
@@ -7690,19 +8020,25 @@ $('#doMove').addEventListener('click', () => {
   const set = getSetById(manageSetId);
   const targetId = $('#moveTarget').value;
   const target = getSetById(targetId);
-  if(!set || !target || movingIndex < 0) return;
-  const item = set.items[movingIndex];
+  if(!set || !target || !movingIdxs.length) return;
+  const items = movingIdxs.map(i => set.items[i]).filter(Boolean);
   const targetEd = editableSetById(targetId);
   const srcEd = editableSetById(manageSetId);
   if(!targetEd || !srcEd) return;
-  if(targetEd.items.some(x => keyOf(x) === keyOf(item))){ toast('目标知识库里已经有这一条'); return; }
-  srcEd.items.splice(movingIndex, 1);
-  targetEd.items.push(Object.assign({}, item));
+  let moved = 0, dup = 0;
+  items.forEach(item => {
+    if(targetEd.items.some(x => keyOf(x) === keyOf(item))){ dup++; return; }
+    targetEd.items.push(Object.assign({}, item));
+    const at = srcEd.items.findIndex(x => keyOf(x) === keyOf(item));
+    if(at >= 0) srcEd.items.splice(at, 1);
+    moved++;
+  });
   save();
   closeMoveModal();
+  setPicked.clear();
   renderSetView();
   renderMenu();
-  toast('已转移到「' + target.name + '」');
+  toast(moved ? '已转移 ' + moved + ' 条到「' + target.name + '」' + (dup ? '，' + dup + ' 条重复跳过' : '') : '目标知识库里都已有这些词条');
 });
 
 /* ================== 记忆流程 ================== */
