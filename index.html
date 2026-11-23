@@ -1536,7 +1536,7 @@
       <button class="seg-btn on" data-seg="friend" type="button">好友</button>
       <button class="seg-btn" data-seg="group" type="button">群聊</button>
       <button class="seg-btn" data-seg="meet" type="button">交友<span class="seg-dot" id="meetDot">0</span></button>
-      <button class="seg-btn" data-seg="admin" type="button">管理员</button>
+      <button class="seg-btn" data-seg="admin" type="button">管理员<span class="seg-dot" id="adminDot">新</span></button>
     </div>
 
     <div id="paneFriend">
@@ -5642,6 +5642,15 @@ function updateSocialBadge(){
   const dot = $('#socialDot'), mdot = $('#meetDot');
   if(dot){ dot.textContent = n > 9 ? '9+' : String(n); dot.classList.toggle('on', n > 0); }
   if(mdot){ mdot.textContent = n > 9 ? '9+' : String(n); mdot.classList.toggle('on', n > 0); }
+  // 管理员频道（含飞信）有未读就在「管理员」页签上点个红点
+  const adot = $('#adminDot');
+  if(adot){
+    const list = (social().adminChats && social().adminChats['admin']) || [];
+    const last = list.length ? list[list.length - 1] : null;
+    const unread = !!(last && (last.at || 0) > (Number(social().adminRead['admin']) || 0) && last.from !== currentUser && !isAdmin());
+    adot.textContent = '新';
+    adot.classList.toggle('on', unread);
+  }
 }
 function setMeetSync(txt, warn){
   const el = $('#meetSync');
@@ -5732,6 +5741,8 @@ async function refreshSocialFromCloud(loud){
     sweepFriendRenames();
     // 云端旧档案里若还挂着「管理员」这个好友，就地清掉再写回
     if(!isAdmin() && (state.social.friends.includes(ADMIN_NAME) || state.social.chats[ADMIN_NAME])) stripAdminFriend();
+    // 顺带把飞信公共栏拉一遍，没打开聊天也能看到红点
+    if(!isAdmin()) syncFeixin().then(changed => { if(changed){ renderSocial(); updateSocialBadge(); } }).catch(() => {});
   }catch(e){
     if(loud) setMeetSync('同步失败，稍后自动重试', true);
   }
@@ -7271,6 +7282,19 @@ async function loadAdminChat(){
     chatView.push(m);
   });
   chatView.sort((a, b) => (a.at || 0) - (b.at || 0));
+  // 飞信公共栏：不管个人档案有没有被同步覆盖，这里都能读到全部飞信
+  try{
+    const feed = await readFeixin();
+    if(feed.length){
+      const seen2 = new Set(chatView.map(msgKey));
+      feed.forEach(m => { const k = msgKey(m); if(!seen2.has(k)){ seen2.add(k); chatView.push(m); } });
+      chatView.sort((a, b) => (a.at || 0) - (b.at || 0));
+      const mine = (social().adminChats[myKey] = social().adminChats[myKey] || []);
+      const seen3 = new Set(mine.map(msgKey));
+      feed.forEach(m => { const k = msgKey(m); if(!seen3.has(k)){ seen3.add(k); mine.push(m); } });
+      mine.sort((a, b) => (a.at || 0) - (b.at || 0));
+    }
+  }catch(e){}
   renderChat();
   social().adminRead[myKey] = Date.now();
   saveLocal();
@@ -7473,7 +7497,7 @@ function pushChat(m){
     save();
     renderChat();
     if(chatAdminPeer === BROADCAST_NAME && isAdmin()) broadcastToUsers(m);
-    else deliverAdminMsg(m);
+    else if(chatAdminPeer !== BROADCAST_NAME) deliverAdminMsg(m);
     return;
   }
   if(!chatFriend) return;
@@ -7503,8 +7527,55 @@ async function deliverAdminMsg(m){
   }catch(e){}
 }
 
+/* 飞信公共栏：所有飞信都存在云端同一行，任何人打开管理员界面都能读到，
+   不依赖“逐个写进每个用户档案”（那样会被对方自己的同步覆盖掉） */
+const FEIXIN_KEY = '#飞信#';
+async function readFeixin(){
+  try{
+    const txt = await cloudReq('GET', '/rest/v1/shiwang_profiles?username=eq.' + encodeURIComponent(FEIXIN_KEY) + '&select=username,payload,updated_at', null, null, 2);
+    let rows = [];
+    try{ rows = JSON.parse(txt || '[]'); }catch(e){ rows = []; }
+    const row = rows && rows[0];
+    if(!row || !row.payload) return [];
+    const d = parseCloudPayload(row.payload);
+    return (d && Array.isArray(d.items)) ? d.items : [];
+  }catch(e){ return []; }
+}
+async function appendFeixin(m){
+  const list = await readFeixin();
+  const k = msgKey(m);
+  if(!list.some(x => msgKey(x) === k)) list.push(m);
+  list.sort((a, b) => (a.at || 0) - (b.at || 0));
+  try{
+    const payload = CLOUD_PLAIN + JSON.stringify({ v: 1, name: FEIXIN_KEY, at: Date.now(), data: { items: list } });
+    await cloudReq('POST', '/rest/v1/shiwang_profiles',
+      JSON.stringify([{ username: FEIXIN_KEY, payload, updated_at: new Date().toISOString() }]),
+      { Prefer: 'resolution=merge-duplicates,return=minimal' }, 2);
+    return true;
+  }catch(e){ return false; }
+}
+
 /* 飞信：管理员以 SightNote 身份群发给所有普通用户，各家在「管理员」栏收到 */
+let lastFeixinSync = 0;
+async function syncFeixin(){
+  const key = 'admin';
+  if(Date.now() - lastFeixinSync < 8000) return false;
+  lastFeixinSync = Date.now();
+  const feed = await readFeixin();
+  if(!feed || !feed.length) return false;
+  const mine = (social().adminChats[key] = social().adminChats[key] || []);
+  const seen = new Set(mine.map(msgKey));
+  let changed = false;
+  feed.forEach(m => { const k = msgKey(m); if(!seen.has(k)){ seen.add(k); mine.push(m); changed = true; } });
+  if(!changed) return false;
+  mine.sort((a, b) => (a.at || 0) - (b.at || 0));
+  saveLocal();
+  return true;
+}
+
 async function broadcastToUsers(m){
+  // 先写公共栏（这是真正的“所有用户都能收到”），再尽力给在线用户各写一份副本
+  await appendFeixin(m);
   let names = [];
   try{
     const res = await cloudUserList();
