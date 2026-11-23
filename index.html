@@ -345,6 +345,27 @@
   .book .lab{font-size:11px;letter-spacing:.14em;color:var(--faint);margin-top:8px;}
   .book .act{font-size:11.5px;color:var(--accent);margin-top:12px;letter-spacing:.06em;}
 
+  /* 记忆库切换条：一个账号可建多个互相独立的库 */
+  .lib-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
+  .lib-chip{
+    display:inline-flex;align-items:center;gap:6px;
+    border:1px solid var(--line);border-radius:99px;
+    background:#fff;padding:6px 10px 6px 12px;
+    font-size:11.5px;color:#4e5a53;line-height:1.2;cursor:pointer;
+    max-width:100%;
+    transition:border-color .18s ease,background .18s ease;
+  }
+  .lib-chip:hover{border-color:var(--accent);}
+  .lib-chip.on{border-color:var(--accent);background:#eef4ef;color:#2f4438;font-weight:600;}
+  .lib-chip .lc-n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px;}
+  .lib-chip .lc-c{color:var(--faint);font-size:10.5px;font-weight:400;}
+  .lib-chip.on .lc-c{color:#5c7162;}
+  .lib-chip .lc-m{
+    border:0;background:transparent;color:#b3bdb6;font-size:12px;line-height:1;padding:2px 3px;
+    border-radius:6px;cursor:pointer;
+  }
+  .lib-chip .lc-m:hover{color:var(--accent);background:#e7efe9;}
+
   .setting-row{
     display:flex;
     align-items:center;
@@ -1399,8 +1420,12 @@
     <section>
       <div class="sec-head">
         <h2>记忆库</h2>
-        <span class="note">标记后自动归类</span>
+        <div class="sec-right">
+          <span class="note">标记后自动归类</span>
+          <button class="net-btn" id="newLib" title="新建一个独立的记忆库">＋ 新建</button>
+        </div>
       </div>
+      <div class="lib-row" id="libRow"></div>
       <div class="books">
         <div class="book" data-book="unknown">
           <div class="num" id="unknownCount">0</div>
@@ -1631,7 +1656,7 @@
   <button class="nav next" id="nextBtn" aria-label="下一页">下一页 →</button>
 </div>
 
-<!-- ============== 词本列表 ============== -->
+<!-- ============== 记忆库列表 ============== -->
 <div class="view" id="viewList">
   <div class="study-top">
     <button class="back" id="listBack">← 菜单</button>
@@ -1739,6 +1764,24 @@
         <div class="field-line"><input id="ttPassIn" type="password" maxlength="32" placeholder="迁移密码" autocomplete="current-password"></div>
         <button class="btn-line" id="ttDoImport" style="margin-top:14px;">导入到当前账号</button>
         <p class="format-tip" id="ttMsg"></p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============== 记忆库：新建 / 重命名 / 删除 ============== -->
+<div class="modal hidden" id="libModal">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h3 id="libModalTitle">新建记忆库</h3>
+      <button class="close-x" id="closeLibModal" aria-label="关闭">×</button>
+    </div>
+    <div class="sheet-body">
+      <p class="format-tip" id="libModalTip">每个记忆库有自己的「陌生 / 熟悉」列表，互不干扰；标记词条时只会记进当前这个库。</p>
+      <div class="field-line"><input id="libNameInput" maxlength="24" placeholder="给这个记忆库起个名字" spellcheck="false" autocomplete="off"></div>
+      <div style="display:flex;gap:10px;margin-top:16px;">
+        <button class="btn-line hidden" id="libDeleteBtn" style="flex:1;">删除这个库</button>
+        <button class="primary" id="libSaveBtn" style="flex:1;">创建</button>
       </div>
     </div>
   </div>
@@ -2048,7 +2091,7 @@
       <div class="chat-log" id="chatLog"></div>
       <div class="chat-tools">
         <button class="btn-line" id="shareSet">分享知识库</button>
-        <button class="btn-line" id="shareWords">分享词本</button>
+        <button class="btn-line" id="shareWords">分享记忆库</button>
       </div>
       <div class="chat-input">
         <button class="mic-btn" id="voiceBtn" type="button" title="语音输入（自动转文字）" aria-label="语音输入">
@@ -2198,9 +2241,9 @@
         <p>有关系批注的词在页面下方带金色下划线；批注随账号保存，换设备也在。</p>
       </div>
       <div class="guide-sec">
-        <div class="guide-h">知识库与词本</div>
+        <div class="guide-h">知识库与记忆库</div>
         <p>「知识库」里每一行是一个词库，点行可开关、点「⋯」管理词条（增删改、重命名、搜索），点「×」删除；误删了可在「我的 → 恢复默认知识库」加回默认词库。</p>
-        <p>「记忆库」分「陌生」和「熟悉」，点进去可逐条查看、复习或移出；下面的「朗读」打开后，点页面上任何一个词条都会自动读一遍，中、英、日、韩都按各自语言发音。</p>
+        <p>「记忆库」可以建多个，每个都有自己的「陌生」和「熟悉」，点进去可逐条查看、复习或移出；下面的「朗读」打开后，点页面上任何一个词条都会自动读一遍，中、英、日、韩都按各自语言发音。</p>
       </div>
       <div class="guide-sec">
         <div class="guide-h">导入</div>
@@ -2214,9 +2257,9 @@
         <div class="guide-h">视窗（好友 / 群聊）</div>
         <p><b>我的突触</b>：每人一个固定的 8 位邀请码，显示在视窗顶部，点「复制」发给朋友。</p>
         <p><b>加好友</b>：输入对方给你的突触码 → 添加，对方在「好友申请」里点接受，才成为好友。不能用名字直接加。</p>
-        <p><b>聊天</b>：点好友行进入对话，可发文字、语音，可分享知识库和词本给对方「收下」；「备注」可给好友改本地显示名，对方看到的还是原名。</p>
+        <p><b>聊天</b>：点好友行进入对话，可发文字、语音，可分享知识库和记忆库给对方「收下」；「备注」可给好友改本地显示名，对方看到的还是原名。</p>
         <p><b>语音</b>：聊天框左侧麦克风，点一下开始说，字幕实时显示；再点一下结束并发送。语音条显示时长和转写文字，点语音条可朗读。</p>
-        <p><b>群聊</b>：视窗切到「群聊」→「＋ 创建群聊」，起名并勾选好友（最多 8 位），对方收到邀请点「加入」即可。群里可发文字、语音，也能分享知识库和词本。</p>
+        <p><b>群聊</b>：视窗切到「群聊」→「＋ 创建群聊」，起名并勾选好友（最多 8 位），对方收到邀请点「加入」即可。群里可发文字、语音，也能分享知识库和记忆库。</p>
         <p><b>交友</b>：视窗切到「交友」，上半是收到的申请（可直接接受或忽略），下半是你发出的申请。处理过的申请会变灰并保留时间，记录随账号同步到云端，换设备也在。</p>
       </div>
       <div class="guide-sec">
@@ -2924,6 +2967,8 @@ const state = {
   enabled: {},
   unknown: [],
   known: [],
+  libs: [],
+  libId: 'main',
   views: {},
   wordEdits: {},
   annotations: {},
@@ -2977,6 +3022,67 @@ function normSocial(s){
   };
 }
 
+/* ---------- 记忆库：一个账号可以建多个互相独立的记忆库 ----------
+   约定：state.known / state.unknown 永远指向「当前库」的两份列表，
+   其余库的列表存放在 state.libs[i]，切换时互换引用。 */
+const LIB_MAIN = 'main';
+const LIB_NAME_MAX = 24;
+
+function libClean(arr){ return Array.isArray(arr) ? arr.filter(x => x && x.en) : []; }
+function libLabel(l){ return (l && l.name) ? l.name : '未命名记忆库'; }
+function libGet(id){
+  const list = Array.isArray(state.libs) ? state.libs : [];
+  return list.find(l => l.id === id) || null;
+}
+function libCurrent(){
+  const list = Array.isArray(state.libs) ? state.libs : [];
+  return list.find(l => l.id === state.libId) || list[0] || null;
+}
+/* 把当前库自己的两份列表更新成 state.known / state.unknown 的最新引用 */
+function libSyncActive(){
+  const l = libCurrent();
+  if(l){ l.known = state.known; l.unknown = state.unknown; }
+}
+/* 保证至少有主库，并把历史数据（只有 known/unknown、没有 libs）接进主库 */
+function libEnsure(){
+  let list = Array.isArray(state.libs) ? state.libs : [];
+  if(!list.length){
+    state.libs = [{ id: LIB_MAIN, name: '默认记忆库', known: state.known, unknown: state.unknown }];
+    state.libId = LIB_MAIN;
+    return;
+  }
+  state.libs.forEach(l => { l.known = libClean(l.known); l.unknown = libClean(l.unknown); });
+  let main = libGet(LIB_MAIN);
+  if(!main){
+    main = { id: LIB_MAIN, name: '默认记忆库', known: [], unknown: [] };
+    state.libs.unshift(main);
+  }
+  if(!libGet(state.libId)) state.libId = LIB_MAIN;
+  if(state.libId === LIB_MAIN){
+    state.known = main.known;
+    state.unknown = main.unknown;
+  }else{
+    const cur = libGet(state.libId);
+    state.known = cur.known;
+    state.unknown = cur.unknown;
+  }
+}
+/* 切换当前库：先把改动写回旧库，再载入新库 */
+function libActivate(id){
+  libSyncActive();
+  const target = libGet(id);
+  if(!target) return false;
+  state.libId = id;
+  state.known = libClean(target.known);
+  state.unknown = libClean(target.unknown);
+  target.known = state.known;
+  target.unknown = state.unknown;
+  return true;
+}
+function libNameExists(name, exceptId){
+  const n = name.trim().toLowerCase();
+  return (state.libs || []).some(l => l.id !== exceptId && libLabel(l).trim().toLowerCase() === n);
+}
 function applySaved(obj){
   obj = obj || {};
   state.customSets = Array.isArray(obj.customSets) ? obj.customSets : [];
@@ -2984,6 +3090,22 @@ function applySaved(obj){
   state.enabled = obj.enabled && typeof obj.enabled === 'object' ? obj.enabled : {};
   state.unknown = Array.isArray(obj.unknown) ? obj.unknown : [];
   state.known = Array.isArray(obj.known) ? obj.known : [];
+  // 记忆库：主库沿用历史字段，其余库各自带 known/unknown
+  const rawLibs = Array.isArray(obj.libs) ? obj.libs : [];
+  const otherLibs = rawLibs.filter(l => l && typeof l.id === 'string' && l.id && l.id !== LIB_MAIN).map(l => ({
+    id: l.id,
+    name: (typeof l.name === 'string' && l.name.trim()) ? l.name.trim().slice(0, LIB_NAME_MAX) : '记忆库',
+    known: libClean(l.known),
+    unknown: libClean(l.unknown)
+  }));
+  const mainName = (typeof obj.libName === 'string' && obj.libName.trim()) ? obj.libName.trim().slice(0, LIB_NAME_MAX) : '默认记忆库';
+  state.libs = [{ id: LIB_MAIN, name: mainName, known: state.known, unknown: state.unknown }].concat(otherLibs);
+  state.libId = (typeof obj.libId === 'string' && otherLibs.some(l => l.id === obj.libId)) ? obj.libId : LIB_MAIN;
+  if(state.libId !== LIB_MAIN){
+    const cur = state.libs.find(l => l.id === state.libId);
+    state.known = cur.known;
+    state.unknown = cur.unknown;
+  }
   state.views = (obj.views && typeof obj.views === 'object') ? obj.views : {};
   state.wordEdits = (obj.wordEdits && typeof obj.wordEdits === 'object') ? obj.wordEdits : {};
   state.annotations = (obj.annotations && typeof obj.annotations === 'object') ? obj.annotations : {};
@@ -3004,6 +3126,7 @@ function applySaved(obj){
     synapse: typeof m.synapse === 'string' ? m.synapse : '',
     adminNotes: (m.adminNotes && typeof m.adminNotes === 'object') ? m.adminNotes : {}
   };
+  libEnsure();
 }
 
 function readProfile(name){
@@ -3029,12 +3152,17 @@ function loadProfile(name){
 function saveLocal(){
   if(!currentUser) return;
   try{
+    libSyncActive();
+    const main = libGet(LIB_MAIN);
     localStorage.setItem(profileKey(currentUser), JSON.stringify({
       customSets: state.customSets,
       hiddenSets: state.hiddenSets,
       enabled: state.enabled,
       unknown: state.unknown,
       known: state.known,
+      libs: state.libs,
+      libId: state.libId,
+      libName: main ? main.name : '默认记忆库',
       views: state.views,
       wordEdits: state.wordEdits || {},
       annotations: state.annotations || {},
@@ -3244,6 +3372,8 @@ function mergeData(base, extra){
   out.enabled = out.enabled && typeof out.enabled === 'object' ? out.enabled : {};
   out.known = Array.isArray(out.known) ? out.known : [];
   out.unknown = Array.isArray(out.unknown) ? out.unknown : [];
+  out.libs = Array.isArray(out.libs) ? out.libs : [];
+  out.libId = typeof out.libId === 'string' ? out.libId : LIB_MAIN;
   out.views = out.views && typeof out.views === 'object' ? out.views : {};
   out.wordEdits = out.wordEdits && typeof out.wordEdits === 'object' ? out.wordEdits : {};
   out.annotations = out.annotations && typeof out.annotations === 'object' ? out.annotations : {};
@@ -3338,6 +3468,26 @@ function mergeData(base, extra){
   (extra.known || []).forEach(it => { if(it && !knownKeys.has(keyOf(it))){ out.known.push(it); knownKeys.add(keyOf(it)); } });
   const unknownKeys = new Set(out.unknown.map(keyOf));
   (extra.unknown || []).forEach(it => { if(it && !unknownKeys.has(keyOf(it))){ out.unknown.push(it); unknownKeys.add(keyOf(it)); } });
+
+  // 记忆库：按 id 合并，同一个库里两边的词条取并集（旧的往返不丢词）
+  (extra.libs || []).forEach(l => {
+    if(!l || typeof l.id !== 'string' || !l.id || l.id === LIB_MAIN) return;
+    const same = out.libs.find(x => x.id === l.id);
+    if(!same){
+      out.libs.push({
+        id: l.id,
+        name: (typeof l.name === 'string' && l.name) ? l.name : '记忆库',
+        known: libClean(l.known),
+        unknown: libClean(l.unknown)
+      });
+      return;
+    }
+    if(!same.name && l.name) same.name = l.name;
+    const kk = new Set(libClean(same.known).map(keyOf));
+    libClean(l.known).forEach(it => { if(!kk.has(keyOf(it))){ same.known.push(it); kk.add(keyOf(it)); } });
+    const uk = new Set(libClean(same.unknown).map(keyOf));
+    libClean(l.unknown).forEach(it => { if(!uk.has(keyOf(it))){ same.unknown.push(it); uk.add(keyOf(it)); } });
+  });
 
   Object.keys(extra.views || {}).forEach(k => {
     out.views[k] = Math.max(Number(out.views[k]) || 0, Number(extra.views[k]) || 0);
@@ -4783,7 +4933,7 @@ function renderSocial(){
   if(list){
     list.innerHTML = '';
     if(!social().friends.length){
-      list.innerHTML = '<div class="transit-empty">加上好友后，可以聊天、互发知识库和词本</div>';
+      list.innerHTML = '<div class="transit-empty">加上好友后，可以聊天、互发知识库和记忆库</div>';
     }
     social().friends.forEach(name => {
       const row = document.createElement('div');
@@ -6638,7 +6788,7 @@ function renderChat(){
   if(!box) return;
   box.innerHTML = '';
   if(!chatView.length){
-    box.innerHTML = '<div class="chat-empty">' + (chatGroupId ? '群里还没有消息，发第一条吧。' : '还没有消息。可以发句问候，或直接分享知识库和词本。') + '</div>';
+    box.innerHTML = '<div class="chat-empty">' + (chatGroupId ? '群里还没有消息，发第一条吧。' : '还没有消息。可以发句问候，或直接分享知识库和记忆库。') + '</div>';
     return;
   }
   chatView.forEach(m => {
@@ -6649,7 +6799,7 @@ function renderChat(){
       el.className = 'msg' + (m.from === currentUser ? ' me' : '') + (m.share ? ' share' : '');
       if(m.share){
         el.innerHTML =
-          '<div class="hd">' + (m.share.kind === 'set' ? '知识库' : '词本') + ' · 来自 ' + escapeHtml(displayName(m.from)) + '</div>' +
+          '<div class="hd">' + (m.share.kind === 'set' ? '知识库' : '记忆库') + ' · 来自 ' + escapeHtml(displayName(m.from)) + '</div>' +
           '<div class="nm">' + escapeHtml(m.share.name) + '</div>' +
           '<div class="ct">' + (m.share.items || []).length + ' 条</div>';
         const btn = document.createElement('button');
@@ -6735,7 +6885,7 @@ function takeShare(m, btn){
 function openSharePick(kind){
   if(!chatFriend && !chatGroupId) return;
   shareKind = kind;
-  $('#sharePickTitle').textContent = kind === 'set' ? '选择要分享的知识库' : '选择要分享的词本';
+  $('#sharePickTitle').textContent = kind === 'set' ? '选择要分享的知识库' : '选择要分享的记忆库';
   const box = $('#sharePickList');
   box.innerHTML = '';
   if(kind === 'set'){
@@ -6780,7 +6930,7 @@ function sendShare(share){
   pushChat({
     at: Date.now(),
     from: currentUser,
-    text: '[' + (share.kind === 'set' ? '知识库' : '词本') + '] ' + share.name,
+    text: '[' + (share.kind === 'set' ? '知识库' : '记忆库') + '] ' + share.name,
     share: share
   });
   toast(chatGroupId ? '已分享到群里' : '已分享给「' + displayName(chatFriend) + '」');
@@ -6931,6 +7081,8 @@ function renderMenu(){
   $('#effectLabel').textContent = fxName;
   $('#unknownCount').textContent = state.unknown.length;
   $('#knownCount').textContent = state.known.length;
+  libEnsure();
+  renderLibs();
   const totalViews = Object.keys(state.views || {}).reduce((s,k) => s + (state.views[k] || 0), 0);
   $('#viewTotal').textContent = totalViews;
   $('#clearViews').disabled = totalViews === 0;
@@ -6977,7 +7129,7 @@ $('#setList').addEventListener('click', (e) => {
   if(del){
     e.stopPropagation();
     const set = getSetById(id);
-    if(set && confirm('删除知识库「' + set.name + '」？已收进词本的记录不受影响。')){
+    if(set && confirm('删除知识库「' + set.name + '」？已收进记忆库的记录不受影响。')){
       deleteSetById(id);
       toast('已删除');
     }
@@ -7185,7 +7337,7 @@ $('#saveItem').addEventListener('click', saveItemForm);
 $('#deleteSet').addEventListener('click', () => {
   const set = getSetById(manageSetId);
   if(!set) return;
-  if(!confirm('删除知识库「' + set.name + '」？已收进词本的记录不受影响。')) return;
+  if(!confirm('删除知识库「' + set.name + '」？已收进记忆库的记录不受影响。')) return;
   deleteSetById(set.id);
   showView($('#viewMenu'));
   toast('已删除');
@@ -8562,7 +8714,7 @@ window.addEventListener('resize', () => {
   }, 180);
 });
 
-/* ================== 词本列表 ================== */
+/* ================== 记忆库列表 ================== */
 let listMode = 'unknown';
 function openList(mode){
   listMode = mode;
@@ -8608,6 +8760,130 @@ function openList(mode){
 
 $('#listBack').addEventListener('click', () => { renderMenu(); showView($('#viewBooks')); });
 $('#reviewBook').addEventListener('click', () => startStudy(listMode));
+
+/* ================== 记忆库：多库切换 / 新建 / 重命名 / 删除 ================== */
+const libModalEl = $('#libModal');
+let libModalMode = 'create';
+let libModalTarget = '';
+
+function libChipCount(l){
+  return '陌 ' + libClean(l.unknown).length + ' · 熟 ' + libClean(l.known).length;
+}
+
+function renderLibs(){
+  const row = $('#libRow');
+  if(!row) return;
+  libSyncActive();
+  row.innerHTML = '';
+  (state.libs || []).forEach(l => {
+    const on = l.id === state.libId;
+    const chip = document.createElement('div');
+    chip.className = 'lib-chip' + (on ? ' on' : '');
+    chip.dataset.id = l.id;
+    chip.innerHTML =
+      '<span class="lc-n">' + escapeHtml(libLabel(l)) + '</span>' +
+      '<span class="lc-c">' + libChipCount(l) + '</span>' +
+      '<button class="lc-m" type="button" title="重命名 / 删除">⋯</button>';
+    chip.addEventListener('click', (e) => {
+      if(e.target.closest('.lc-m')) return;
+      if(l.id === state.libId) return;
+      if(!libActivate(l.id)) return;
+      save();
+      renderMenu();
+      renderLibs();
+      toast('已切换到「' + libLabel(libCurrent()) + '」');
+    });
+    chip.querySelector('.lc-m').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openLibModal('manage', l.id);
+    });
+    row.appendChild(chip);
+  });
+}
+
+function openLibModal(mode, id){
+  libModalMode = mode;
+  libModalTarget = id || '';
+  const l = libGet(id);
+  const input = $('#libNameInput');
+  if(!input) return;
+  $('#libModalTitle').textContent = mode === 'create' ? '新建记忆库' : '管理记忆库';
+  $('#libModalTip').textContent = mode === 'create'
+    ? '每个记忆库有自己的「陌生 / 熟悉」列表，互不干扰；标记词条时只会记进当前这个库。'
+    : '改名立即生效。删除只影响这个库自己的「陌生 / 熟悉」，知识库和词条内容不受影响。';
+  input.value = mode === 'create' ? '' : (l ? libLabel(l) : '');
+  $('#libSaveBtn').textContent = mode === 'create' ? '创建' : '保存改名';
+  const del = $('#libDeleteBtn');
+  const canDel = mode === 'manage' && id !== LIB_MAIN && (state.libs || []).length > 1;
+  del.classList.toggle('hidden', !canDel);
+  libModalEl.classList.remove('hidden');
+  requestAnimationFrame(() => libModalEl.classList.add('show'));
+  setTimeout(() => { try{ input.focus(); }catch(e){} }, 120);
+}
+
+function closeLibModal(){
+  libModalEl.classList.remove('show');
+  setTimeout(() => libModalEl.classList.add('hidden'), 220);
+}
+
+if($('#newLib')) $('#newLib').addEventListener('click', () => openLibModal('create'));
+if($('#closeLibModal')) $('#closeLibModal').addEventListener('click', closeLibModal);
+if(libModalEl) libModalEl.addEventListener('click', (e) => { if(e.target === libModalEl) closeLibModal(); });
+if($('#libNameInput')) $('#libNameInput').addEventListener('keydown', (e) => {
+  if(e.key === 'Enter'){ e.preventDefault(); $('#libSaveBtn').click(); }
+});
+
+$('#libSaveBtn').addEventListener('click', () => {
+  const name = ($('#libNameInput').value || '').trim().slice(0, LIB_NAME_MAX);
+  if(!name){ toast('先给记忆库起个名字'); return; }
+  if(libModalMode === 'create'){
+    if(libNameExists(name)){ toast('已经有同名的记忆库'); return; }
+    libSyncActive();
+    const id = 'lib' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    state.libs.push({ id, name, known: [], unknown: [] });
+    state.libs = state.libs.slice();
+    if(!libActivate(id)) return;
+    save();
+    closeLibModal();
+    renderMenu();
+    renderLibs();
+    toast('已新建「' + name + '」，并切到它');
+    return;
+  }
+  const l = libGet(libModalTarget);
+  if(!l){ closeLibModal(); return; }
+  if(libNameExists(name, l.id)){ toast('已经有同名的记忆库'); return; }
+  l.name = name;
+  save();
+  closeLibModal();
+  renderMenu();
+  renderLibs();
+  toast('已改名为「' + name + '」');
+});
+
+$('#libDeleteBtn').addEventListener('click', () => {
+  const l = libGet(libModalTarget);
+  if(!l || l.id === LIB_MAIN) return;
+  const had = libClean(l.known).length + libClean(l.unknown).length;
+  if(!confirm('删除记忆库「' + libLabel(l) + '」？库里标记的 ' + had + ' 条会一起删掉，知识库不受影响。')) return;
+  state.libs = (state.libs || []).filter(x => x.id !== l.id);
+  if(state.libId === l.id){
+    // 删的就是当前库：直接把指针挪走，不能再去「写回旧库」，否则会把已删除库的列表塞进新库
+    const first = state.libs.find(x => x.id === LIB_MAIN) || state.libs[0];
+    if(first){
+      state.libId = first.id;
+      state.known = libClean(first.known);
+      state.unknown = libClean(first.unknown);
+      first.known = state.known;
+      first.unknown = state.unknown;
+    }
+  }
+  save();
+  closeLibModal();
+  renderMenu();
+  renderLibs();
+  toast('已删除记忆库「' + libLabel(l) + '」');
+});
 
 /* ================== 导入 ================== */
 const modal = $('#importModal');
