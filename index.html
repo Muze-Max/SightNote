@@ -3166,6 +3166,9 @@ function normSocial(s){
     gchats: (s.gchats && typeof s.gchats === 'object') ? s.gchats : {},
     gread: (s.gread && typeof s.gread === 'object') ? s.gread : {},
     sreq: sreqRaw,
+    /* 管理员通道：和好友聊天完全分开存，互不影响 */
+    adminChats: (s.adminChats && typeof s.adminChats === 'object') ? s.adminChats : {},
+    adminRead: (s.adminRead && typeof s.adminRead === 'object') ? s.adminRead : {},
     rlog: Array.isArray(s.rlog) ? s.rlog.filter(r => r && typeof r.from === 'string' && r.from).map(r => ({
       from: r.from, at: Number(r.at) || 0,
       status: (r.status === 'rejected' || r.status === 'pending') ? r.status : 'accepted'
@@ -3872,8 +3875,7 @@ function enterAccount(name, cloudData){
   setTimeout(bgSyncOnce, 20000);
   // 登录后确保突触码存在（老账号没生成过就补一个，并写进云端映射）
   setTimeout(() => { try{ ensureSynapse().then(() => updateSynapseUI()).catch(() => {}); }catch(e){} }, 400);
-  // 系统默认好友：管理员
-  setTimeout(() => { try{ ensureAdminFriend(); }catch(e){} }, 800);
+  // 管理员不再自动塞进好友列表：管理员走「管理员」通道，和好友聊天分开
   // 登录后顺手核对一下有没有好友改了名（不会多出一个号）
   setTimeout(() => { try{ sweepFriendRenames(); }catch(e){} }, 3000);
   // 登入时检查是否有别台设备正在使用同一个名字
@@ -5092,6 +5094,7 @@ const chatModal = $('#viewChat');
 const sharePickModal = $('#sharePickModal');
 let chatFriend = '';
 let chatGroupId = '';
+let chatAdminPeer = '';      // 非空 = 正在「管理员」通道里聊天（与好友聊天完全分开）
 let socialTab = 'friend';
 let chatTimer = null;
 let chatView = [];
@@ -5116,14 +5119,8 @@ function remarkOf(name){
   const v = social().notes ? social().notes[name] : '';
   return (typeof v === 'string') ? v : '';
 }
-function displayName(name){
-  const rk = remarkOf(name);
-  if(rk) return rk;
-  // 管理员对外就叫 SightNote（账号名不露出来）
-  return (name === ADMIN_NAME) ? ADMIN_DISPLAY : name;
-}
+function displayName(name){ return remarkOf(name) || name; }
 function chatTitleOf(name){
-  if(name === ADMIN_NAME) return remarkOf(name) || ADMIN_DISPLAY;
   const rk = remarkOf(name);
   return rk ? rk + '（' + name + '）' : name;
 }
@@ -5256,13 +5253,10 @@ function renderSocial(){
       const msgs = social().chats[name] || [];
       const last = msgs.length ? msgs[msgs.length - 1] : null;
       const rk = remarkOf(name);
-      const isAdminRow = (name === ADMIN_NAME);
-      const label = rk || (isAdminRow ? ADMIN_DISPLAY : name);
-      const oriText = isAdminRow ? '管理员' : (rk ? name : '');
       row.innerHTML =
-        '<span class="av">' + escapeHtml(label.slice(0, 1)) + '</span>' +
-        '<span class="who"><span class="nm">' + escapeHtml(label) + '</span>' +
-          (oriText ? '<span class="ori">' + escapeHtml(oriText) + '</span>' : '') +
+        '<span class="av">' + escapeHtml((rk || name).slice(0, 1)) + '</span>' +
+        '<span class="who"><span class="nm">' + escapeHtml(rk || name) + '</span>' +
+          (rk ? '<span class="ori">' + escapeHtml(name) + '</span>' : '') +
           '<div class="sub">' + (last
             ? escapeHtml((last.share ? '[分享] ' : '') + (last.voice ? '[语音] ' : '') + (last.text || '').slice(0, 18))
             : '还没有聊天，点开说两句') + '</div></span>' +
@@ -5366,13 +5360,14 @@ function setSocialTab(tab){
   if(tab === 'group') renderGroups();
   if(tab === 'meet') renderMeet();
   if(tab === 'admin'){
-    // 普通用户点「管理员」= 直接进入和管理员的聊天界面（返回后显示好友栏）
-    if(typeof isAdmin === 'function' && !isAdmin()){
-      openChat(ADMIN_NAME);
-      setSocialTab('friend');
+    if(typeof isAdmin === 'function' && isAdmin()){
+      renderAdminPane();
       return;
     }
-    renderAdminPane();
+    // 普通用户点「管理员」= 直接进入和管理员的聊天界面（返回后显示好友栏）
+    setSocialTab('friend');
+    openAdminChat('admin');
+    return;
   }
 }
 
@@ -5381,25 +5376,26 @@ let adminCodeCache = '';
 async function renderAdminPane(){
   const box = $('#adminList');
   if(!box) return;
-  const name = (typeof ADMIN_NAME === 'string' ? ADMIN_NAME : '木泽');
   const line = $('#adminNoteLine');
-  // 管理员看自己这栏：不显示“自己加自己”的卡片，只留一句入口提示
+  const s = social();
+  // 管理员这栏：普通用户发来的消息（存在 adminChats，和好友聊天不交叉）
   if(isAdmin()){
     if(line) line.textContent = '普通用户发来的消息都在这里';
-    const s = social();
-    const names = Object.keys(s.chats || {}).filter(n => (s.chats[n] || []).length);
+    const names = Object.keys(s.adminChats || {}).filter(n => (s.adminChats[n] || []).length);
+    const hint = $('#adminHint');
     if(!names.length){
       box.innerHTML = '';
-      const hint0 = $('#adminHint'); if(hint0) hint0.style.display = 'none';
+      if(hint) hint.style.display = 'none';
       return;
     }
+    if(hint) hint.style.display = '';
     names.sort((a, b) => {
-      const la = s.chats[a][s.chats[a].length - 1], lb = s.chats[b][s.chats[b].length - 1];
+      const la = s.adminChats[a][s.adminChats[a].length - 1], lb = s.adminChats[b][s.adminChats[b].length - 1];
       return (lb.at || 0) - (la.at || 0);
     }).forEach(n => {
-      const list = s.chats[n];
+      const list = s.adminChats[n];
       const last = list[list.length - 1] || {};
-      const unread = (last.at || 0) > (Number(s.read[n]) || 0) && last.from !== currentUser;
+      const unread = (last.at || 0) > (Number(s.adminRead[n]) || 0) && last.from !== currentUser;
       const row = document.createElement('div');
       row.className = 'friend-row';
       row.innerHTML =
@@ -5407,54 +5403,21 @@ async function renderAdminPane(){
         '<span class="who"><span class="nm">' + escapeHtml(displayName(n)) + '</span>' +
           '<div class="sub">' + escapeHtml((last.from === currentUser ? '我：' : '') + (last.text || '[消息]').slice(0, 18)) + '</div></span>' +
         (unread ? '<span class="badge">新</span>' : '');
-      row.addEventListener('click', () => openChat(n));
+      row.addEventListener('click', () => openAdminChat(n));
       box.appendChild(row);
     });
-    const hint1 = $('#adminHint'); if(hint1) hint1.style.display = '';
     return;
   }
-  const hint = $('#adminHint'); if(hint) hint.style.display = '';
-  if(line) line.textContent = '负责账号安全与数据治理';
-  let code = adminCodeCache;
-  if(!code){
-    try{
-      const row = await cloudPull(name);
-      const d = row ? parseCloudPayload(row.payload) : null;
-      code = (d && d.meta && d.meta.synapse) || '';
-      if(code) adminCodeCache = code;
-    }catch(e){}
-  }
-  const isFriend = social().friends.includes(name);
+  // 普通用户：管理员栏就是和管理员聊天的入口，不显示任何可拉黑/删除的卡片
+  if(line) line.textContent = '系统管理员 · 和好友聊天互不相通';
   box.innerHTML = '';
   const row = document.createElement('div');
   row.className = 'friend-row';
   row.innerHTML =
-    '<div class="av">管</div>' +
-    '<div class="who"><div class="nm">' + escapeHtml(name) + ' · 管理员</div>' +
-      '<div class="sub">' + (code ? ('突触 ' + code + ' · 系统安全员') : '系统安全员') + '</div></div>';
-  const btn = document.createElement('button');
-  btn.className = 'btn-line';
-  btn.style.padding = '7px 13px';
-  btn.style.fontSize = '11px';
-  if(isFriend){
-    btn.textContent = '发消息';
-    btn.addEventListener('click', () => openChat(name));
-  }else{
-    btn.textContent = '加为好友';
-    btn.addEventListener('click', async () => {
-      if(!code){
-        // 抓不到编码就让用户手输
-        $('#friendInput').value = '';
-        setSocialTab('meet');
-        toast('把管理员的突触码输入到交友页的输入框');
-        return;
-      }
-      $('#friendInput').value = code;
-      setSocialTab('meet');
-      addFriend();
-    });
-  }
-  row.appendChild(btn);
+    '<span class="av">管</span>' +
+    '<span class="who"><span class="nm">' + escapeHtml(ADMIN_DISPLAY) + '</span>' +
+      '<div class="sub">系统管理员 · 点开直接聊天</div></span>';
+  row.addEventListener('click', () => openAdminChat('admin'));
   box.appendChild(row);
 }
 
@@ -5844,23 +5807,36 @@ function msgKey(m){
 function openChat(name){
   chatFriend = name;
   chatGroupId = '';
+  chatAdminPeer = '';
+  chatModal.classList.remove('admin-mode');
   $('#chatTitle').textContent = chatTitleOf(name);
   $('#chatText').value = '';
   chatView = [];
   const av = $('#chatAvatar');
   if(av){
-    if(name === ADMIN_NAME){
-      // 管理员与系统绑定：头像只是身份标记，点了也不能删
-      av.classList.add('ghost');
-      av.textContent = '管';
-      av.title = '管理员 · 系统默认好友，不可删除';
-    }else{
-      av.classList.remove('ghost');
-      av.textContent = (displayName(name) || name).slice(0, 1);
-      av.title = '点头像可删除好友';
-    }
+    av.classList.remove('ghost');
+    av.textContent = (displayName(name) || name).slice(0, 1);
+    av.title = '点头像可删除好友';
   }
   showView(chatModal);          // 打开独立的聊天界面，不再弹窗
+  loadChat();
+  clearInterval(chatTimer);
+  chatTimer = setInterval(loadChat, 15000);
+}
+
+/* 管理员通道：普通用户这边 key 固定是 'admin'（显示名 SightNote），
+   管理员这边 key 是来消息的用户名。和好友聊天（chats）用的是两套数据。 */
+function openAdminChat(peer){
+  chatFriend = '';
+  chatGroupId = '';
+  chatAdminPeer = peer || 'admin';
+  chatModal.classList.add('admin-mode');
+  $('#chatTitle').textContent = isAdmin() ? displayName(peer) : ADMIN_DISPLAY;
+  $('#chatText').value = '';
+  chatView = [];
+  const av = $('#chatAvatar');
+  if(av){ av.classList.add('ghost'); av.textContent = '管'; av.title = '管理员 · 系统身份，不可删除'; }
+  showView(chatModal);
   loadChat();
   clearInterval(chatTimer);
   chatTimer = setInterval(loadChat, 15000);
@@ -5871,6 +5847,8 @@ function openGroupChat(gid){
   if(!g){ toast('这个群不存在了'); return; }
   chatFriend = '';
   chatGroupId = gid;
+  chatAdminPeer = '';
+  chatModal.classList.remove('admin-mode');
   $('#chatTitle').textContent = g.name + ' · ' + (g.members || []).length + ' 人';
   $('#chatText').value = '';
   chatView = [];
@@ -5888,6 +5866,8 @@ function closeChat(){
   chatTimer = null;
   chatFriend = '';
   chatGroupId = '';
+  chatAdminPeer = '';
+  chatModal.classList.remove('admin-mode');
   // 回到视窗页（不重新拉云端，保持原样的列表）
   try{ renderSocial(); }catch(e){}
   showView($('#viewBooks'));
@@ -5898,6 +5878,7 @@ const delFriendModal = $('#delFriendModal');
 let delFriendTarget = '';
 function openDelFriend(){
   const name = delFriendTarget = chatFriend;
+  if(chatAdminPeer){ toast('管理员是系统身份，不能删除'); return; }
   if(!name){ toast('群聊不支持在这里删除'); return; }
   if(name === ADMIN_NAME) return;          // 管理员不可删除，头像只是身份标记
   if(!social().friends.includes(name)){ toast('你们还不是好友'); return; }
@@ -6104,7 +6085,6 @@ async function doRename(){
     renderMenu();
     renderSocial();
     updateSynapseUI();
-    ensureAdminFriend();
     toast('用户名已改为「' + nu + '」');
     closeRename();
   } finally {
@@ -7146,6 +7126,7 @@ if(guideModal) guideModal.addEventListener('click', e => { if(e.target === guide
 
 async function loadChat(){
   if(chatGroupId){ await loadGroupChat(); return; }
+  if(chatAdminPeer){ await loadAdminChat(); return; }
   if(!chatFriend) return;
   const local = (social().chats[chatFriend] || []).slice();
   let remote = [];
@@ -7166,6 +7147,34 @@ async function loadChat(){
   chatView.sort((a, b) => (a.at || 0) - (b.at || 0));
   renderChat();
   social().read[chatFriend] = Date.now();
+  saveLocal();
+}
+
+/* 管理员通道的读取：普通用户读管理员档案里「以我为 key」的那一段；
+   管理员读对方档案里 key='admin' 的那一段。跟好友 chats 完全不交叉。 */
+async function loadAdminChat(){
+  const myKey = isAdmin() ? chatAdminPeer : 'admin';
+  const remoteName = isAdmin() ? chatAdminPeer : ADMIN_NAME;
+  const remoteKey = isAdmin() ? 'admin' : currentUser;
+  const local = (social().adminChats[myKey] || []).slice();
+  let remote = [];
+  try{
+    const row = await cloudPull(remoteName);
+    const d = row ? parseCloudPayload(row.payload) : readProfile(remoteName);
+    const s = d ? normSocial(d.social) : null;
+    remote = (s && Array.isArray(s.adminChats[remoteKey])) ? s.adminChats[remoteKey] : [];
+  }catch(e){}
+  const seen = new Set();
+  chatView = [];
+  local.concat(remote).forEach(m => {
+    const k = msgKey(m);
+    if(seen.has(k)) return;
+    seen.add(k);
+    chatView.push(m);
+  });
+  chatView.sort((a, b) => (a.at || 0) - (b.at || 0));
+  renderChat();
+  social().adminRead[myKey] = Date.now();
   saveLocal();
 }
 
@@ -7359,36 +7368,48 @@ function pushChat(m){
     renderChat();
     return;
   }
+  if(chatAdminPeer){
+    const myKey = isAdmin() ? chatAdminPeer : 'admin';
+    (social().adminChats[myKey] = social().adminChats[myKey] || []).push(m);
+    chatView.push(m);
+    save();
+    renderChat();
+    deliverAdminMsg(m);
+    return;
+  }
   if(!chatFriend) return;
   (social().chats[chatFriend] = social().chats[chatFriend] || []).push(m);
   chatView.push(m);
   save();
   renderChat();
-  // 发给管理员的消息同步放进管理员档案，管理员那边才收得到
-  if(chatFriend === ADMIN_NAME && currentUser !== ADMIN_NAME) deliverToAdmin(m);
 }
 
-/* 把发给管理员的这条消息投到管理员档案里（顺带把我加进管理员好友） */
-async function deliverToAdmin(m){
+/* 管理员通道投递：普通用户→管理员档案[key=用户名]；管理员→对方档案[key='admin']。
+   和好友 chats 无关，所以给管理员发消息不会出现在好友「木泽」的会话里。 */
+async function deliverAdminMsg(m){
   try{
-    const admin = ADMIN_NAME;
-    const row = await cloudPull(admin);
+    const target = isAdmin() ? chatAdminPeer : ADMIN_NAME;
+    const key = isAdmin() ? 'admin' : currentUser;
+    if(!target) return;
+    const row = await cloudPull(target);
     const d = row ? parseCloudPayload(row.payload) : null;
     if(!d) return;
     d.social = normSocial(d.social);
-    if(!d.social.friends.includes(currentUser)) d.social.friends.push(currentUser);
-    const list = (d.social.chats[currentUser] = d.social.chats[currentUser] || []);
+    const list = (d.social.adminChats[key] = d.social.adminChats[key] || []);
     const k = msgKey(m);
     if(!list.some(x => msgKey(x) === k)) list.push(m);
-    if(d.social.read) delete d.social.read[currentUser];   // 让管理员那边显示未读
-    await cloudPutRaw(admin, d);
-    adminCodeCache = (d.meta && d.meta.synapse) || adminCodeCache;
+    if(d.social.adminRead) delete d.social.adminRead[key];   // 让对面显示未读
+    await cloudPutRaw(target, d);
+    if(!isAdmin()) adminCodeCache = (d.meta && d.meta.synapse) || adminCodeCache;
   }catch(e){}
 }
 
+/* 兼容旧调用：一律走管理员通道 */
+async function deliverToAdmin(m){ await deliverAdminMsg(m); }
+
 function sendChatText(){
   const txt = $('#chatText').value.trim();
-  if(!txt || (!chatFriend && !chatGroupId)) return;
+  if(!txt || (!chatFriend && !chatGroupId && !chatAdminPeer)) return;
   pushChat({ at: Date.now(), from: currentUser, text: txt });
   $('#chatText').value = '';
 }
@@ -7427,7 +7448,7 @@ function takeShare(m, btn){
 
 /* ---------- 分享 ---------- */
 function openSharePick(kind){
-  if(!chatFriend && !chatGroupId) return;
+  if(!chatFriend && !chatGroupId && !chatAdminPeer) return;
   shareKind = kind;
   $('#sharePickTitle').textContent = kind === 'set' ? '选择要分享的知识库' : '选择要分享的记忆库';
   const box = $('#sharePickList');
@@ -7470,14 +7491,14 @@ function closeSharePick(){
 }
 
 function sendShare(share){
-  if(!chatFriend && !chatGroupId) return;
+  if(!chatFriend && !chatGroupId && !chatAdminPeer) return;
   pushChat({
     at: Date.now(),
     from: currentUser,
     text: '[' + (share.kind === 'set' ? '知识库' : '记忆库') + '] ' + share.name,
     share: share
   });
-  toast(chatGroupId ? '已分享到群里' : '已分享给「' + displayName(chatFriend) + '」');
+  toast(chatGroupId ? '已分享到群里' : (chatAdminPeer ? '已发给管理员' : '已分享给「' + displayName(chatFriend) + '」'));
 }
 
 if($('#friendAdd')) $('#friendAdd').addEventListener('click', addFriend);
@@ -7515,7 +7536,7 @@ function closeVoiceUI(){
 }
 
 function sendVoice(text, dur){
-  if(!chatFriend && !chatGroupId) return;
+  if(!chatFriend && !chatGroupId && !chatAdminPeer) return;
   pushChat({ at: Date.now(), from: currentUser, text: text, voice: { dur: dur } });
 }
 
@@ -7537,7 +7558,7 @@ function stopVoice(){
 
 function startVoice(){
   if(voiceActive){ stopVoice(); return; }
-  if(!chatFriend && !chatGroupId){ toast('先打开一个聊天'); return; }
+  if(!chatFriend && !chatGroupId && !chatAdminPeer){ toast('先打开一个聊天'); return; }
   if(!SRClass){ toast('这个浏览器不支持语音转文字，换 Chrome / Edge / Safari 试试'); return; }
   try{
     voiceRec = new SRClass();
