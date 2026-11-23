@@ -1436,11 +1436,13 @@
         <h2>知识库</h2>
         <div class="sec-right">
           <span class="note" id="setNote">选择要练习的内容</span>
-          <button class="net-btn" id="newSetBtn" title="新建一个知识库（可归到某个知识库下面）">＋ 新建</button>
           <button class="net-btn" id="openTransit" title="在用户之间迁移知识库">视途</button>
         </div>
       </div>
       <ul class="set-list" id="setList"></ul>
+      <div class="lib-row" style="margin:8px 0 2px;">
+        <div class="lib-chip add" id="newSetChip" role="button" tabindex="0" title="新建一个知识库（可归到某个知识库下面）"><span class="lc-n">＋ 新建知识库</span></div>
+      </div>
       <button class="ghost-add" id="openImport">＋ 导入图片 / 文档 / 文字</button>
     </section>
 
@@ -7610,7 +7612,8 @@ $('#setMulti').addEventListener('click', () => {
   renderSetView();
 });
 $('#setMove').addEventListener('click', openSetMoveModal);
-$('#newSetBtn').addEventListener('click', openNewSetModal);
+$('#newSetChip').addEventListener('click', openNewSetModal);
+$('#newSetChip').addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); openNewSetModal(); } });
 $('#closeSetMove').addEventListener('click', () => hideModal($('#setMoveModal')));
 $('#doSetMove').addEventListener('click', doSetMove);
 $('#closeNewSet').addEventListener('click', () => hideModal($('#newSetModal')));
