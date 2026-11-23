@@ -1892,7 +1892,7 @@
 <div class="modal hidden" id="itemModal">
   <div class="sheet">
     <div class="sheet-head">
-      <h3 id="itemTitle">添加词条</h3>
+      <h3 id="itemTitle">记忆存储</h3>
       <button class="close-x" id="closeItem" aria-label="关闭">×</button>
     </div>
     <div class="sheet-body">
@@ -1900,13 +1900,6 @@
       <div class="field-line"><input id="itemZh" maxlength="180" placeholder="释义 / 中文"></div>
       <div class="field-line"><input id="itemPos" maxlength="20" placeholder="词性，如 n. / v. / phr.（可空）"></div>
       <div class="field-line"><input id="itemRoot" maxlength="80" placeholder="备注 / 词根（可空）"></div>
-      <div class="field-line">
-        <select id="itemType">
-          <option value="word">单词</option>
-          <option value="phrase">短语</option>
-          <option value="sentence">句子</option>
-        </select>
-      </div>
       <button class="btn-line" id="saveItem" style="margin-top:14px;">保存</button>
     </div>
   </div>
@@ -2015,10 +2008,11 @@
     <div class="sheet-body">
       <!-- 文字 -->
       <div class="pane on" id="paneText">
-        <textarea id="textInput" placeholder="abandon v. 放弃&#10;give up - 放弃&#10;The plan failed. 计划失败了。"></textarea>
+        <textarea id="textInput" placeholder="abandon&#10;v.&#10;放弃&#10;词根 ab- 强调 + andon 放弃&#10;&#10;give up&#10;phr.&#10;放弃&#10;（备注可空）"></textarea>
         <p class="format-tip">
-          每行一条，中英文之间用空格、逗号、冒号或横线分隔都行。识别到中文才开始算一条。<br>
-          单个英文词 → 单词；两到四个词 → 短语；更长的句子 → 句子。
+          每四行一条，顺序对应记忆存储的前四行：<br>
+          第一行 ① 内容 → 第二行 ③ 词性 → 第三行 ② 释义 → 第四行 ④ 备注 / 词根。<br>
+          词性与备注可留空行；条目之间空一行即可。类型（单词 / 短语 / 句子）自动判断。
         </p>
       </div>
 
@@ -8195,6 +8189,7 @@ $('#startStudy').addEventListener('click', () => {
 /* ================== 知识库管理 ================== */
 let manageSetId = '';
 let editingIndex = -1;
+let editItemType = '';   // 记忆存储：打开时这条原本的类型（类型不再手选，只做沿用）
 let movingIdxs = [];
 let setSelOn = false;
 const setPicked = new Set();
@@ -8305,12 +8300,12 @@ function openItemModal(index){
   if(!set) return;
   editingIndex = (typeof index === 'number') ? index : -1;
   const it = editingIndex >= 0 ? set.items[editingIndex] : null;
-  $('#itemTitle').textContent = it ? '编辑词条' : '添加词条';
+  $('#itemTitle').textContent = '记忆存储';
   $('#itemEn').value = it ? it.en : '';
   $('#itemZh').value = it ? (it.zh || '') : '';
   $('#itemPos').value = it ? (it.pos || '') : '';
   $('#itemRoot').value = it ? (it.root || '') : '';
-  $('#itemType').value = it ? (it.type || 'word') : (set.items[0] ? set.items[0].type : 'word');
+  editItemType = it ? (it.type || 'word') : '';
   itemModal.classList.remove('hidden');
   requestAnimationFrame(() => itemModal.classList.add('show'));
   setTimeout(() => $('#itemEn').focus(), 250);
@@ -8332,7 +8327,8 @@ function saveItemForm(){
     en, zh,
     pos: $('#itemPos').value.trim(),
     root: $('#itemRoot').value.trim(),
-    type: $('#itemType').value
+    // 类型不再手选：内容一变就重新判断，内容没变就沿用原来的
+    type: (editingIndex >= 0 && editItemType && set.items[editingIndex] && set.items[editingIndex].en === en) ? editItemType : autoTypeOf(en)
   };
   const k = keyOf(item);
   const dupIdx = set.items.findIndex((x, i) => keyOf(x) === k && i !== editingIndex);
@@ -10154,18 +10150,80 @@ function showPane(which){
   }
 }
 
-/* —— 文字解析 —— */
+/* —— 文字解析（记忆存储：每四行一条，① 内容 → ③ 词性 → ② 释义 → ④ 备注/词根） —— */
 $('#confirmImport').addEventListener('click', () => {
   if($('#panePreview').classList.contains('on')){
     saveImport();
   }else{
     const txt = $('#textInput').value;
     if(!txt.trim()){ toast('先粘贴一些内容'); return; }
-    const items = parseText(txt);
+    const items = parseMemoryText(txt);
     if(!items.length){ toast('没识别到内容，检查一下格式'); return; }
     showPreview(items, '手动导入');
   }
 });
+
+const POS_TOKEN = /^(?:n|v|vt|vi|adj|adv|prep|pron|conj|num|art|int|aux|phr|abbr)\.(?:\s*\/\s*(?:n|v|vt|vi|adj|adv)\.)*$/i;
+function autoTypeOf(en){
+  const words = String(en || '').trim().split(/\s+/).filter(Boolean).length;
+  return (/[.?!]$/.test(en) || words >= 5) ? 'sentence' : (words >= 2 ? 'phrase' : 'word');
+}
+function parseMemoryText(text){
+  const out = [];
+  const seen = new Set();
+  let cur = null;
+
+  const push = () => {
+    if(!cur) return;
+    const en = cur.en.trim();
+    if(en && /[A-Za-z]/.test(en)){
+      const k = en.toLowerCase();
+      if(!seen.has(k)){
+        seen.add(k);
+        out.push({ en, pos: cur.pos, zh: cur.zh || '未填写释义', root: cur.root, type: autoTypeOf(en) });
+      }
+    }
+    cur = null;
+  };
+
+  text.split(/\r?\n/).forEach(raw => {
+    let line = String(raw).replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ').trim();
+    if(!line) return;
+    // 去掉 ①②③④ 这类序号与「词性：」「释义：」这类小标签
+    line = line.replace(/^[①②③④⑤⑥⑦⑧⑨⑩\-–—*·•>]+\s*/, '')
+               .replace(/^(?:词性|释义|中文|词根|备注|内容|英文)\s*[:：]\s*/, '')
+               .trim();
+    if(!line) return;
+
+    if(POS_TOKEN.test(line)){
+      if(cur) cur.pos = cur.pos || line;
+      return;
+    }
+
+    if(CJK.test(line)){
+      if(cur){
+        if(!cur.zh) cur.zh = line.replace(/^[\s:：\-–—,，;；|]+/, '').trim();
+        else cur.root = (cur.root ? cur.root + '；' : '') + line;
+      }
+      return;    // 还没有对应的内容行，中文行先跳过
+    }
+
+    if(!/[A-Za-z]/.test(line)) return;
+    // 新的内容行（①）：先把上一条收好
+    push();
+    let en = line.replace(/\/[^\/]{1,30}\//g, ' ')                  // 去掉音标
+                  .replace(/^\d+\s*[.)、]\s*/, '')                    // 去掉序号
+                  .replace(/[\s\-–—:：,，;；\/|]+$/,'')
+                  .replace(/^[\s\-–—:：,，;；|]+/,'')
+                  .replace(/\s+/g,' ').trim();
+    let pos = '';
+    const m = en.match(/\s*((?:n|v|vt|vi|adj|adv|prep|pron|conj|num|art|int|aux|phr)\.(?:\s*\/\s*(?:n|v|vt|vi|adj|adv)\.)?)$/i);
+    if(m){ pos = m[1].trim(); en = en.slice(0, m.index).trim(); }
+    cur = { en, pos, zh:'', root:'' };
+  });
+  push();
+  return out;
+}       
 
 function parseText(text){
   const out = [];
@@ -10235,7 +10293,8 @@ function showPreview(items, source){
     const row = document.createElement('div');
     row.className = 'prow';
     row.innerHTML = '<div class="p-en">' + escapeHtml(it.en) + (it.pos ? ' <span style="color:#a9b6ad;font-style:italic;">' + escapeHtml(it.pos) + '</span>' : '') + '</div>' +
-      '<div class="p-zh">' + escapeHtml(it.zh) + '</div>';
+      '<div class="p-zh">' + escapeHtml(it.zh) + '</div>' +
+      (it.root ? '<div class="p-zh" style="color:#a9a9a0;font-size:11px;">' + escapeHtml(it.root) + '</div>' : '');
     frag.appendChild(row);
   });
   list.appendChild(frag);
