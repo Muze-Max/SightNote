@@ -3913,6 +3913,8 @@ function enterAccount(name, cloudData){
   setTimeout(() => { try{ ensureSynapse().then(() => updateSynapseUI()).catch(() => {}); }catch(e){} }, 400);
   // 管理员不再作为好友：清掉历史自动加的那条（聊到管理员的旧消息搬进管理员通道）
   setTimeout(() => { try{ stripAdminFriend(); }catch(e){} }, 0);
+  // 管理员登录时把自己发过的飞信补进公共栏，避免只有旧副本的用户漏收
+  setTimeout(() => { try{ backfillFeixin(); }catch(e){} }, 1500);
   setTimeout(() => { try{ stripAdminFriend(); }catch(e){} }, 900);
   setTimeout(() => { try{ stripAdminFriend(); }catch(e){} }, 2800);
   // 登录后顺手核对一下有没有好友改了名（不会多出一个号）
@@ -7541,18 +7543,32 @@ async function readFeixin(){
     return (d && Array.isArray(d.items)) ? d.items : [];
   }catch(e){ return []; }
 }
+async function writeFeixin(list){
+  const arr = (list || []).slice().sort((a, b) => (a.at || 0) - (b.at || 0));
+  try{
+    const payload = CLOUD_PLAIN + JSON.stringify({ v: 1, name: FEIXIN_KEY, at: Date.now(), data: { items: arr } });
+    await cloudReq('POST', '/rest/v1/shiwang_profiles',
+      JSON.stringify([{ username: FEIXIN_KEY, payload, updated_at: new Date().toISOString() }]),
+      { Prefer: 'resolution=merge-duplicates,return=minimal' }, 3);
+    return true;
+  }catch(e){ return false; }
+}
 async function appendFeixin(m){
   const list = await readFeixin();
   const k = msgKey(m);
   if(!list.some(x => msgKey(x) === k)) list.push(m);
-  list.sort((a, b) => (a.at || 0) - (b.at || 0));
-  try{
-    const payload = CLOUD_PLAIN + JSON.stringify({ v: 1, name: FEIXIN_KEY, at: Date.now(), data: { items: list } });
-    await cloudReq('POST', '/rest/v1/shiwang_profiles',
-      JSON.stringify([{ username: FEIXIN_KEY, payload, updated_at: new Date().toISOString() }]),
-      { Prefer: 'resolution=merge-duplicates,return=minimal' }, 2);
-    return true;
-  }catch(e){ return false; }
+  return writeFeixin(list);
+}
+/* 管理员本机发过的飞信如果没写进公共栏（旧版或网络抖动），登录时自动补齐 */
+async function backfillFeixin(){
+  if(!isAdmin()) return false;
+  const mine = ((social().adminChats || {})[BROADCAST_NAME] || []);
+  if(!mine.length) return false;
+  const feed = await readFeixin();
+  const seen = new Set(feed.map(msgKey));
+  const missing = mine.filter(m => !seen.has(msgKey(m)));
+  if(!missing.length) return false;
+  return writeFeixin(feed.concat(missing));
 }
 
 /* 飞信：管理员以 SightNote 身份群发给所有普通用户，各家在「管理员」栏收到 */
