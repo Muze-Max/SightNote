@@ -365,6 +365,9 @@
     border-radius:6px;cursor:pointer;
   }
   .lib-chip .lc-m:hover{color:var(--accent);background:#e7efe9;}
+  .lib-chip.add{border-style:dashed;border-color:#cfdcd3;color:#5d7a67;background:#fbfdfb;}
+  .lib-chip.add:hover{border-color:var(--accent);color:var(--accent);background:#eef4ef;}
+  .lib-chip.add .lc-n{font-weight:400;}
 
   .setting-row{
     display:flex;
@@ -1420,10 +1423,7 @@
     <section>
       <div class="sec-head">
         <h2>记忆库</h2>
-        <div class="sec-right">
-          <span class="note">标记后自动归类</span>
-          <button class="net-btn" id="newLib" title="新建一个独立的记忆库">＋ 新建</button>
-        </div>
+        <span class="note">标记后自动归类</span>
       </div>
       <div class="lib-row" id="libRow"></div>
       <div class="books">
@@ -8782,7 +8782,6 @@ function renderLibs(){
     chip.dataset.id = l.id;
     chip.innerHTML =
       '<span class="lc-n">' + escapeHtml(libLabel(l)) + '</span>' +
-      '<span class="lc-c">' + libChipCount(l) + '</span>' +
       '<button class="lc-m" type="button" title="重命名 / 删除">⋯</button>';
     chip.addEventListener('click', (e) => {
       if(e.target.closest('.lc-m')) return;
@@ -8799,6 +8798,13 @@ function renderLibs(){
     });
     row.appendChild(chip);
   });
+  // 「新建」和「默认记忆库」同款胶囊，就排在同一行末尾
+  const add = document.createElement('div');
+  add.className = 'lib-chip add';
+  add.id = 'libNewChip';
+  add.innerHTML = '<span class="lc-n">＋ 新建记忆库</span>';
+  add.addEventListener('click', () => openLibModal('create'));
+  row.appendChild(add);
 }
 
 function openLibModal(mode, id){
