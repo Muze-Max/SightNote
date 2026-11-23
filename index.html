@@ -3430,6 +3430,29 @@ async function resolveRenamed(name){
   }catch(e){ return ''; }
 }
 
+/* 两个聊天列表合到一起：按「时间+发送者+内容」去重，免得同一个人的两段记录粘出重复消息 */
+function mergeChatList(a, b){
+  const out = [], seen = {};
+  (a || []).concat(b || []).forEach(m => {
+    if(!m) return;
+    const k = (m.at || 0) + '|' + (m.from || '') + '|' + (m.text || '');
+    if(seen[k]) return;
+    seen[k] = 1; out.push(m);
+  });
+  out.sort((x, y) => (x.at || 0) - (y.at || 0));
+  return out;
+}
+
+/* 聊天里每条消息都记着发送者名字，改名后要一起换，否则同一个人会出现两个署名 */
+function rewriteChatFrom(chatMap, oldName, newName){
+  if(!chatMap) return;
+  Object.keys(chatMap).forEach(k => {
+    const arr = chatMap[k];
+    if(!Array.isArray(arr)) return;
+    arr.forEach(m => { if(m && m.from === oldName) m.from = newName; });
+  });
+}
+
 /* 视窗里别人改了名：把本地好友名、聊天键一起换成新名字（每个刷新周期最多查 2 个） */
 let renameSweepAt = 0;
 async function sweepFriendRenames(){
@@ -3458,11 +3481,12 @@ function renameLocalFriend(oldName, newName){
   s.sreq = (s.sreq || []).map(r => r.to === oldName ? Object.assign({}, r, { to: newName }) : r);
   s.rlog = (s.rlog || []).map(r => r.from === oldName ? Object.assign({}, r, { from: newName }) : r);
   if(s.chats[oldName]){
-    s.chats[newName] = (s.chats[newName] || []).concat(s.chats[oldName]);
+    s.chats[newName] = mergeChatList(s.chats[newName], s.chats[oldName]);
     delete s.chats[oldName];
   }
   if(s.read[oldName] != null){ s.read[newName] = Math.max(s.read[newName] || 0, s.read[oldName]); delete s.read[oldName]; }
   if(s.notes[oldName]){ s.notes[newName] = s.notes[newName] || s.notes[oldName]; delete s.notes[oldName]; }
+  rewriteChatFrom(s.chats, oldName, newName);
   (s.groups || []).forEach(g => {
     g.members = (g.members || []).map(x => x === oldName ? newName : x);
     if(g.owner === oldName) g.owner = newName;
@@ -3774,6 +3798,8 @@ function enterAccount(name, cloudData){
   showView($('#viewMenu'));
   startBgSync();
   setTimeout(bgSyncOnce, 20000);
+  // 登录后顺手核对一下有没有好友改了名（不会多出一个号）
+  setTimeout(() => { try{ sweepFriendRenames(); }catch(e){} }, 3000);
   // 登入时检查是否有别台设备正在使用同一个名字
   const others = othersOnline();
   if(others.length){
@@ -5105,6 +5131,9 @@ function renderSocial(){
 
   renderMeet();
 
+  // 顺手核对好友是否改过名：有就并成一条，不到 60 秒不会重复发请求
+  setTimeout(() => { try{ sweepFriendRenames(); }catch(e){} }, 0);
+
   const list = $('#friendList');
   if(list){
     list.innerHTML = '';
@@ -5715,6 +5744,8 @@ async function doRename(){
     }
 
     const old = currentUser;
+    // 自己的聊天记录里，署的旧名字一起换成新名字（要在做快照之前改，才会同步到云端）
+    rewriteChatFrom(social().chats, old, nu);
     const snap = ttSnapshot();
     const oldProf = readProfile(old) || {};
     try{
@@ -5752,7 +5783,7 @@ async function doRename(){
         if(!d) continue;
         d.social = normSocial(d.social);
         if(d.social.chats[old]){
-          d.social.chats[nu] = (d.social.chats[nu] || []).concat(d.social.chats[old]);
+          d.social.chats[nu] = mergeChatList(d.social.chats[nu], d.social.chats[old]);
           delete d.social.chats[old];
         }
         if(d.social.read[old] != null){ d.social.read[nu] = d.social.read[old]; delete d.social.read[old]; }
@@ -5765,6 +5796,7 @@ async function doRename(){
           g.members = (g.members || []).map(x => x === old ? nu : x);
           if(g.owner === old) g.owner = nu;
         });
+        rewriteChatFrom(d.social.chats, old, nu);
         await cloudPush(f, d);
       }catch(e){}
     }
