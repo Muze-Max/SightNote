@@ -2242,7 +2242,7 @@
     </div>
     <div class="sheet-body">
       <div class="field-line"><input id="renameInput" maxlength="20" placeholder="新的用户名（不能和别人重名）" spellcheck="false"></div>
-      <div class="hint-mini" style="margin:10px 2px 0;" id="renameTip">改名后进度会一起搬过去，突触码不变</div>
+      <div class="hint-mini" style="margin:10px 2px 0;" id="renameTip">只改名字，还是同一个号：云端资料、好友都不搬家，突触码不变</div>
       <button class="primary" id="doRename" style="margin-top:14px;">确认修改</button>
     </div>
   </div>
@@ -2353,7 +2353,7 @@
       </div>
       <div class="guide-sec">
         <div class="guide-h">账号</div>
-        <p><b>用户名</b>：我的 → 用户名 → 修改。不能和别人重名（本机与云端都会查）；改名后进度、好友、群聊一起搬过去，旧名字释放，突触码不变。</p>
+        <p><b>用户名</b>：我的 → 用户名 → 修改。不能和别人重名（本机与云端都会查）；改名只是换名字，账号还是同一个——云端资料不搬不删，好友、群聊里跟着显示新名字，不会多出一个号；旧名字会留一条指路记录，用旧名字登录会自动进到新名字，突触码不变。</p>
         <p><b>知识锁</b>：开启后登录这个用户名需要先输密码，防止别人误登。</p>
         <p><b>星云</b>：查看各设备登录情况、自动同步状态，最近 5 次云端记录可回退。</p>
         <p><b>切换用户</b>：同一台设备可保存多个用户名，各自的进度分开存。</p>
@@ -3030,6 +3030,7 @@ let cloudRetryTimer = null;
 const CLOUD_PLAIN = 'SWP.';    // 不加密的云端记录前缀
 
 let currentUser = '';
+let renameHop = 0;
 try{ currentUser = localStorage.getItem(CURRENT_KEY) || ''; }catch(e){ currentUser = ''; }
 
 const profileKey = name => PROFILE_PREFIX + name;
@@ -3401,6 +3402,75 @@ function parseCloudPayload(payload){
   }catch(e){ return null; }
 }
 
+/* ---------- 改名：旧名字留一条「改名指针」，保证只有一个号 ----------
+   改名不是搬家，而是同一个号换了个名字：云端数据仍然只有一份，
+   旧名字下只放一条 {__renamedTo: 新名}，任何设备拉到它都能自动跟到新名字。 */
+const RENAME_FLAG = '__renamedTo';
+function renameTargetOf(data){
+  if(!data || typeof data !== 'object') return '';
+  const v = data[RENAME_FLAG];
+  return (typeof v === 'string' && v && v !== '') ? v : '';
+}
+function renamePayload(newName){
+  return CLOUD_PLAIN + JSON.stringify({ v: 1, at: Date.now(), data: { [RENAME_FLAG]: newName } });
+}
+const RENAME_AT = '1970-01-01T00:00:00+00:00';   // 指针行的标记时间，用户列表据此跳过它
+async function writeRenamePointer(oldName, newName){
+  const key = normName(oldName) || oldName;
+  await cloudReq('POST', '/rest/v1/shiwang_profiles',
+    JSON.stringify([{ username: key, payload: renamePayload(newName), updated_at: RENAME_AT }]),
+    { Prefer: 'resolution=merge-duplicates,return=minimal' }, 2);
+}
+async function resolveRenamed(name){
+  try{
+    const row = await cloudPull(name);
+    if(!row || !row.payload) return '';
+    const full = parseCloudEnvelope(row.payload);
+    return full ? renameTargetOf(full.data) : '';
+  }catch(e){ return ''; }
+}
+
+/* 视窗里别人改了名：把本地好友名、聊天键一起换成新名字（每个刷新周期最多查 2 个） */
+let renameSweepAt = 0;
+async function sweepFriendRenames(){
+  if(Date.now() - renameSweepAt < 60000) return;
+  renameSweepAt = Date.now();
+  const s = social();
+  const friends = (s.friends || []).slice(0, 40);
+  let changed = 0;
+  for(const f of friends){
+    if(changed >= 2) break;
+    const to = await resolveRenamed(f);
+    if(!to || to === f) continue;
+    renameLocalFriend(f, to);
+    changed++;
+  }
+  if(changed){
+    save();
+    renderSocial();
+    pushMySocial();
+  }
+}
+function renameLocalFriend(oldName, newName){
+  const s = social();
+  s.friends = (s.friends || []).map(x => x === oldName ? newName : x).filter((x, i, a) => a.indexOf(x) === i);
+  s.req = (s.req || []).map(r => r.from === oldName ? Object.assign({}, r, { from: newName }) : r);
+  s.sreq = (s.sreq || []).map(r => r.to === oldName ? Object.assign({}, r, { to: newName }) : r);
+  s.rlog = (s.rlog || []).map(r => r.from === oldName ? Object.assign({}, r, { from: newName }) : r);
+  if(s.chats[oldName]){
+    s.chats[newName] = (s.chats[newName] || []).concat(s.chats[oldName]);
+    delete s.chats[oldName];
+  }
+  if(s.read[oldName] != null){ s.read[newName] = Math.max(s.read[newName] || 0, s.read[oldName]); delete s.read[oldName]; }
+  if(s.notes[oldName]){ s.notes[newName] = s.notes[newName] || s.notes[oldName]; delete s.notes[oldName]; }
+  (s.groups || []).forEach(g => {
+    g.members = (g.members || []).map(x => x === oldName ? newName : x);
+    if(g.owner === oldName) g.owner = newName;
+  });
+  state.social = s;
+  if(state.social.chats[newName]) state.social.chats[newName].sort((a, b) => (a.at || 0) - (b.at || 0));
+}
+
 /* 连同写入时间一起解析，用于多设备按新旧合并 */
 function parseCloudEnvelope(payload){
   if(!payload || payload.indexOf(CLOUD_PLAIN) !== 0) return null;
@@ -3693,6 +3763,7 @@ function startCloudRetry(name){
 }
 
 function enterAccount(name, cloudData){
+  renameHop = 0;
   currentUser = normName(name) || name;
   try{ localStorage.setItem(CURRENT_KEY, currentUser); }catch(e){}
   loadProfile(currentUser);
@@ -3721,6 +3792,13 @@ async function bgSyncOnce(){
   try{
     const pulled = await pullMerged(name, false);
     if(!pulled.data) return;
+    // 这个账号在别处改了名：本方不再往旧名字写数据，改用新名字登录即可
+    const renamedTo = renameTargetOf(pulled.data);
+    if(renamedTo){
+      setSyncLine('这个账号已改名为「' + renamedTo + '」，重新登录即可');
+      toast('「' + name + '」已改名为「' + renamedTo + '」，请重新登录', 3500);
+      return;
+    }
     lastCloudSyncAt = Math.max(lastCloudSyncAt, pulled.at);
     const localAt = localSavedAt(name);
     if(pulled.at > localAt + 800){
@@ -4194,6 +4272,15 @@ async function doLogin(){
     }
     if(pulled.data){ cloudData = pulled.data; cloudAt = pulled.at || 0; }
     else if(pulled.row && pulled.row.payload) legacy = true;
+    // 用旧名字登录：云端那行是「改名为 X」的指针，直接跟到新名字，不再另开一个号
+    const renamedTo = cloudData ? renameTargetOf(cloudData) : '';
+    if(renamedTo && renamedTo !== raw && renameHop < 3){
+      renameHop++;
+      $('#loginName').value = renamedTo;
+      btn.disabled = false;
+      toast('「' + raw + '」已改名为「' + renamedTo + '」，正在用新名字登录', 2200);
+      return doLogin();
+    }
   }catch(e){
     if(!offline){
       // 合并失败时退回单条拉取
@@ -5365,6 +5452,8 @@ async function refreshSocialFromCloud(loud){
       const hhmm = new Date().toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 5);
       setMeetSync('已同步 · ' + hhmm + (after ? ' · ' + after + ' 条待处理' : ' · 暂无新申请'));
     }
+    // 有好友改了名字：跟到新名字上，列表里不出现两个号
+    sweepFriendRenames();
   }catch(e){
     if(loud) setMeetSync('同步失败，稍后自动重试', true);
   }
@@ -5377,6 +5466,7 @@ async function pushMySocial(){
   try{
     const row = await cloudPull(currentUser);
     const pulled = row ? parseCloudPayload(row.payload) : null;
+    if(pulled && renameTargetOf(pulled)) return false;   // 云端那行只是改名指针，别把数据写回旧名字
     let d = pulled || readProfile(currentUser) || {};
     if(pulled && pulled.social){ try{ mergeData(state, { social: pulled.social, chats: pulled.social.chats }); }catch(e){} }
     d.social = normSocial(state.social);
@@ -5391,6 +5481,7 @@ async function addFriend(){
   $('#friendAdd').disabled = true;
   let name = '';
   try{ name = await syLookup(code); }catch(e){}
+  if(name) name = (await resolveRenamed(name)) || name;   // 对方改过名，直接加新名字
   if(!name){
     $('#friendAdd').disabled = false;
     toast('没查到这个突触码，向朋友再确认一下');
@@ -5597,7 +5688,7 @@ if($('#remarkInput')) $('#remarkInput').addEventListener('keydown', (e) => {
 const renameModal = $('#renameModal');
 function openRename(){
   $('#renameInput').value = currentUser || '';
-  $('#renameTip').textContent = '改名后进度会一起搬过去，突触码不变；不能和别人重名';
+  $('#renameTip').textContent = '只改名字、不搬家：还是同一个号，云端资料不动，好友那边跟着改名，突触码不变';
   renameModal.classList.remove('hidden');
   requestAnimationFrame(() => renameModal.classList.add('show'));
   setTimeout(() => $('#renameInput').focus(), 240);
@@ -5616,7 +5707,12 @@ async function doRename(){
     if(listUsers().includes(nu)){ toast('本机已经有这个用户名了'); return; }
     let row = null;
     try{ row = await cloudPull(nu); }catch(e){}
-    if(row){ toast('「' + nu + '」已经被别人用了，换一个'); return; }
+    if(row){
+      // 如果那个名字是我自己以前的名字（改名指针指向我），可以收回
+      const full = row.payload ? parseCloudEnvelope(row.payload) : null;
+      const target = full ? renameTargetOf(full.data) : '';
+      if(target !== currentUser){ toast('「' + nu + '」已经被别人用了，换一个'); return; }
+    }
 
     const old = currentUser;
     const snap = ttSnapshot();
@@ -5639,7 +5735,10 @@ async function doRename(){
     });
 
     const pushed = await cloudPush(nu, snap);
-    if(pushed){ try{ await cloudDel(old); }catch(e){} }
+    if(pushed){
+      // 旧名字不删库：只留一条改名指针，谁再用旧名字都会被带到新名字
+      try{ await writeRenamePointer(old, nu); }catch(e){}
+    }
     else toast('云端暂时没同步上，之后会自动重试');
 
     await syPublish((state.meta && state.meta.synapse) || '', nu);
@@ -5660,6 +5759,8 @@ async function doRename(){
         if(d.social.notes[old]){ d.social.notes[nu] = d.social.notes[old]; delete d.social.notes[old]; }
         d.social.friends = d.social.friends.map(x => x === old ? nu : x).filter((x, i, a) => a.indexOf(x) === i);
         d.social.req = (d.social.req || []).map(r => (r.from === old) ? Object.assign({}, r, { from: nu }) : r);
+        d.social.sreq = (d.social.sreq || []).map(r => (r.to === old) ? Object.assign({}, r, { to: nu }) : r);
+        d.social.rlog = (d.social.rlog || []).map(r => (r.from === old) ? Object.assign({}, r, { from: nu }) : r);
         (d.social.groups || []).forEach(g => {
           g.members = (g.members || []).map(x => x === old ? nu : x);
           if(g.owner === old) g.owner = nu;
@@ -5795,6 +5896,7 @@ async function cloudUserList(){
     if(!r || typeof r.username !== 'string') return;
     if(r.username.indexOf('#') === 0) return;          // 突触映射 / 传信 / 讲解 这类系统行
     if(/#H\d{6,}$/.test(r.username)){ hist++; histNames.push(r.username); return; } // 版本历史快照行，不算用户
+    if(String(r.updated_at || '').indexOf('1970-01-01') === 0) return;               // 改名指针行，不算一个号
     const name = r.username.replace(/\s+/g, ' ').trim();
     if(!name) return;
     if(users.some(u => u.username === name)) return;
