@@ -5116,8 +5116,14 @@ function remarkOf(name){
   const v = social().notes ? social().notes[name] : '';
   return (typeof v === 'string') ? v : '';
 }
-function displayName(name){ return remarkOf(name) || name; }
+function displayName(name){
+  const rk = remarkOf(name);
+  if(rk) return rk;
+  // 管理员对外就叫 SightNote（账号名不露出来）
+  return (name === ADMIN_NAME) ? ADMIN_DISPLAY : name;
+}
 function chatTitleOf(name){
+  if(name === ADMIN_NAME) return remarkOf(name) || ADMIN_DISPLAY;
   const rk = remarkOf(name);
   return rk ? rk + '（' + name + '）' : name;
 }
@@ -5250,10 +5256,13 @@ function renderSocial(){
       const msgs = social().chats[name] || [];
       const last = msgs.length ? msgs[msgs.length - 1] : null;
       const rk = remarkOf(name);
+      const isAdminRow = (name === ADMIN_NAME);
+      const label = rk || (isAdminRow ? ADMIN_DISPLAY : name);
+      const oriText = isAdminRow ? '管理员' : (rk ? name : '');
       row.innerHTML =
-        '<span class="av">' + escapeHtml((rk || name).slice(0, 1)) + '</span>' +
-        '<span class="who"><span class="nm">' + escapeHtml(rk || name) + '</span>' +
-          (rk ? '<span class="ori">' + escapeHtml(name) + '</span>' : '') +
+        '<span class="av">' + escapeHtml(label.slice(0, 1)) + '</span>' +
+        '<span class="who"><span class="nm">' + escapeHtml(label) + '</span>' +
+          (oriText ? '<span class="ori">' + escapeHtml(oriText) + '</span>' : '') +
           '<div class="sub">' + (last
             ? escapeHtml((last.share ? '[分享] ' : '') + (last.voice ? '[语音] ' : '') + (last.text || '').slice(0, 18))
             : '还没有聊天，点开说两句') + '</div></span>' +
@@ -5380,7 +5389,7 @@ async function renderAdminPane(){
     const s = social();
     const names = Object.keys(s.chats || {}).filter(n => (s.chats[n] || []).length);
     if(!names.length){
-      box.innerHTML = '<div class="transit-empty">还没有用户给管理员发消息。<br>普通用户点「管理员」就是和你对话，消息会出现在这。</div>';
+      box.innerHTML = '';
       const hint0 = $('#adminHint'); if(hint0) hint0.style.display = 'none';
       return;
     }
@@ -6114,6 +6123,7 @@ if($('#meSyCode')) $('#meSyCode').addEventListener('click', copySynapse);
 
 /* ---------- 安全员：最高权限面板（仅「木泽」可见） ---------- */
 const ADMIN_NAME = '木泽';
+const ADMIN_DISPLAY = 'SightNote';
 
 /* 已被注销的名字（云端真删没有权限时用墓碑，这份名单让本机面板不再显示它们） */
 const TOMB_KEY = 'sww-admin-tomb';
