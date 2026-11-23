@@ -1237,6 +1237,9 @@
   .fx-chip.on{border-color:#c9a12f;background:#fbf3d9;color:#8a6a13;}
   .fx-chip input{width:11px;height:11px;accent-color:#c9a12f;margin:0;}
   .fx-chip input:disabled + span{color:#b9b9b0;}
+  /* ① 内容点一下就能读：给个轻提示 */
+  [data-say]{cursor:pointer;}
+  [data-say]:hover{text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px;}
   .fx-tip{font-size:10.5px;color:#b4795a;}
   .fx-bar input[type="date"]{
     padding:5px 8px;border:1px solid var(--line);border-radius:8px;
@@ -1521,7 +1524,7 @@
       <div class="setting-row" style="margin-top:12px;">
         <div>
           朗读
-          <div class="desc">开启后，点页面上的词、短语、句子都会朗读（中 / 英 / 日 / 韩）</div>
+          <div class="desc">开启后，学习页点词、短语、句子会自动朗读（中 / 英 / 日 / 韩）；知识库与记忆库里的①内容点一下也能读</div>
         </div>
         <button class="switch" data-setting="readAloud" aria-label="朗读"></button>
       </div>
@@ -3388,7 +3391,22 @@ function save(){
 }
 
 /* ---------- 云端读写 ---------- */
-/* 部分宿主页面会拦截 fetch 到外部域名（表现为 Failed to fetch），改用 XHR 更稳 */
+/* 部分宿主页面会拦截 fetch 到外部域名（表现为 Failed to fetch），改用 XHR 更稳；
+   反过来微信 / 某些 WebView 也会拦 XHR，所以两边互为兜底。 */
+function cloudFetchOnce(method, path, body, extra){
+  return new Promise(function(resolve, reject){
+    if(typeof fetch !== 'function'){ reject(new Error('no fetch')); return; }
+    var headers = { apikey: CLOUD_KEY, Authorization: 'Bearer ' + CLOUD_KEY };
+    if(body) headers['Content-Type'] = 'application/json';
+    if(extra) for(var k in extra) headers[k] = extra[k];
+    fetch(CLOUD_URL + path, { method: method, headers: headers, body: body || undefined, cache: 'no-store' })
+      .then(function(r){
+        if(r.ok) return r.text();
+        return r.text().then(function(t){ throw new Error('HTTP ' + r.status + ' ' + (t || '')); });
+      })
+      .then(resolve, reject);
+  });
+}
 function cloudReqOnce(method, path, body, extra){
   return new Promise(function(resolve, reject){
     var x = new XMLHttpRequest();
@@ -3405,6 +3423,9 @@ function cloudReqOnce(method, path, body, extra){
     x.onerror = function(){ reject(new Error('network error')); };
     x.ontimeout = function(){ reject(new Error('timeout')); };
     x.send(body || null);
+  }).catch(function(err){
+    // XHR 被拦 / 被墙 / 内核不支持：换 fetch 再试一次
+    return cloudFetchOnce(method, path, body, extra);
   });
 }
 
@@ -3843,11 +3864,18 @@ function mergeData(base, extra){
   const records = (ma.records || []).slice();
   (mb.records || []).forEach(r => { if(r && r.at && !records.some(x => x.at === r.at)) records.push(r); });
   records.sort((a,b) => b.at - a.at);
+  const notes = Object.assign({}, (ma.adminNotes && typeof ma.adminNotes === 'object') ? ma.adminNotes : {},
+    (mb.adminNotes && typeof mb.adminNotes === 'object') ? mb.adminNotes : {});
+  const j1 = Number(ma.joinedAt) || 0, j2 = Number(mb.joinedAt) || 0;
   out.meta = {
     constellation: ma.constellation || mb.constellation || '',
     devices: devices,
     records: records.slice(0, 5),
-    lock: (ma.lock && ma.lock.on) ? ma.lock : (mb.lock || { on:false, hash:'' })
+    lock: (ma.lock && ma.lock.on) ? ma.lock : (mb.lock || { on:false, hash:'' }),
+    // 突触码、注册时间、管理员备注都要留住，别在合并时丢掉
+    synapse: ma.synapse || mb.synapse || '',
+    joinedAt: (j1 && j2) ? Math.min(j1, j2) : (j1 || j2),
+    adminNotes: notes
   };
   return out;
 }
@@ -3947,6 +3975,8 @@ function enterAccount(name, cloudData){
   showView($('#viewMenu'));
   startBgSync();
   setTimeout(bgSyncOnce, 20000);
+  // 登录后马上跟云端对一次：微信 / 浏览器各有自己的本机存储，靠这一步立刻对齐
+  setTimeout(() => { try{ reconcileNow(currentUser, { toast:false }); }catch(e){} }, 1400);
   // 登录后确保突触码存在（老账号没生成过就补一个，并写进云端映射）
   setTimeout(() => { try{ ensureSynapse().then(() => updateSynapseUI()).catch(() => {}); }catch(e){} }, 400);
   // 管理员不再作为好友：清掉历史自动加的那条（聊到管理员的旧消息搬进管理员通道）
@@ -3968,39 +3998,89 @@ function enterAccount(name, cloudData){
 
 /* 后台同步：任何一台设备用同一用户名，改动都会在几十秒内出现在其它设备 */
 let bgSyncTimer = null;
+/* 内容指纹：用来判断「合并后到底有没有变化」，不看设备时钟，避免两端时间不一致导致同步卡住 */
+function richPrint(d){
+  if(!d) return '';
+  const sets = (d.customSets || []).reduce((s,x) => s + ':' + x.id + '=' + ((x.items && x.items.length) || 0), '');
+  const libs = (d.libs || []).map(l => l.id + '=' + (l.known || []).length + '/' + (l.unknown || []).length).join(',');
+  const soc = d.social || {};
+  const chats = Object.keys(soc.chats || {}).map(f => f + '=' + (soc.chats[f] || []).length).join(',');
+  const adm = Object.keys(soc.adminChats || {}).map(f => f + '=' + (soc.adminChats[f] || []).length).join(',');
+  return [sets, libs, (d.known || []).length, (d.unknown || []).length,
+    Object.keys(d.views || {}).length, (d.hiddenSets || []).length,
+    (soc.friends || []).length, chats, adm,
+    (soc.groups || []).length, Object.keys(soc.notes || {}).length,
+    (d.meta && d.meta.synapse) || ''].join('|');
+}
+
+/* 一次完整核对：云端 + 本机双向取并集。哪边有、哪边没有，都不会被吞掉。
+   微信打开与浏览器打开本来就各有自己的本机存储，靠这一步把两边对齐。 */
+async function reconcileNow(name, opts){
+  opts = opts || {};
+  if(!name) return false;
+  const local = readProfile(name);
+  let pulled = null;
+  try{ pulled = await pullMerged(name, false); }catch(e){ return false; }
+  const cloud = pulled && pulled.data ? pulled.data : null;
+
+  if(!cloud){
+    // 云端还没有这个号（或只有空壳）：把本机完整内容写上去
+    if(local && !isThinSnapshot(local)){ await cloudPush(name, local); return true; }
+    return false;
+  }
+  if(isThinSnapshot(cloud) && local && !isThinSnapshot(local)){
+    await cloudPush(name, local);
+    return true;
+  }
+
+  const merged = local ? mergeData(cloud, local) : cloud;
+  const cloudPrint = richPrint(cloud), localPrint = richPrint(local), mergedPrint = richPrint(merged);
+  let changed = false;
+
+  // 本机落后：把并集落到本机
+  if(localPrint !== mergedPrint){
+    applySaved(merged);
+    saveLocal();
+    changed = true;
+  }
+  // 云端落后：把并集写回云端（只在确实有新内容时写，避免无意义覆盖）
+  if(cloudPrint !== mergedPrint){
+    await cloudPush(name, merged);
+    changed = true;
+  }
+  if(changed && opts.quiet !== true){
+    renderMenu();
+    markNet();
+    if(!$('#viewStudy').classList.contains('hidden') && deck.length){
+      try{
+        buildDeck();
+        if(pageIndex >= deck.length) pageIndex = Math.max(0, deck.length - 1);
+        renderPage();
+      }catch(e){}
+    }
+    setSyncLine('已与云端对齐 · ' + fmtTime(Date.now()));
+    if(opts.toast !== false) toast('已与云端对齐');
+  }
+  return changed;
+}
+
 async function bgSyncOnce(){
   if(!currentUser || cloudBlocked || document.hidden) return;
   if(document.querySelector('.modal.show')) return;
   const name = currentUser;
   try{
     const pulled = await pullMerged(name, false);
-    if(!pulled.data) return;
-    // 这个账号在别处改了名：本方不再往旧名字写数据，改用新名字登录即可
-    const renamedTo = renameTargetOf(pulled.data);
-    if(renamedTo){
-      setSyncLine('这个账号已改名为「' + renamedTo + '」，重新登录即可');
-      toast('「' + name + '」已改名为「' + renamedTo + '」，请重新登录', 3500);
-      return;
-    }
-    lastCloudSyncAt = Math.max(lastCloudSyncAt, pulled.at);
-    const localAt = localSavedAt(name);
-    if(pulled.at > localAt + 800){
-      // 云端与本机合并，学习次数取高、知识库取更全，不会把本机新进度冲掉
-      const merged = mergeData(pulled.data, readProfile(name));
-      applySaved(merged);
-      saveLocal();
-      cloudPush(name, merged);
-      renderMenu();
-      markNet();
-      if(!$('#viewStudy').classList.contains('hidden') && deck.length){
-        buildDeck();
-        if(pageIndex >= deck.length) pageIndex = Math.max(0, deck.length - 1);
-        renderPage();
+    if(pulled && pulled.data){
+      const renamedTo = renameTargetOf(pulled.data);
+      if(renamedTo){
+        setSyncLine('这个账号已改名为「' + renamedTo + '」，重新登录即可');
+        toast('「' + name + '」已改名为「' + renamedTo + '」，请重新登录', 3500);
+        return;
       }
-      setSyncLine('已同步另一台设备的更新 · ' + fmtTime(pulled.at));
-      toast('已同步另一台设备的更新');
     }
-  }catch(e){ /* 网络不好就等下一轮 */ }
+    lastCloudSyncAt = Math.max(lastCloudSyncAt, (pulled && pulled.at) || 0);
+  }catch(e){ return; }
+  try{ await reconcileNow(name, { quiet:false }); }catch(e){}
 }
 
 /* ---------- 星云：设备登记 / 星座 / 30 分钟自动同步 ---------- */
@@ -7433,70 +7513,146 @@ function detectLang(t){
   return 'en-US';
 }
 let lastSpokenUtter = null;
+/* 语音包缓存：第一次 getVoices() 常常是空的，缓存住就不用每次重查 */
+let voiceCache = [];
+function refreshVoices(){
+  try{
+    const vs = (window.speechSynthesis && window.speechSynthesis.getVoices && window.speechSynthesis.getVoices()) || [];
+    if(vs.length) voiceCache = vs;
+  }catch(e){}
+  return voiceCache;
+}
 function pickVoice(lang){
   try{
-    const vs = window.speechSynthesis.getVoices() || [];
-    const want = lang.slice(0,2).toLowerCase();
-    return vs.filter(v => (v.lang || '').toLowerCase().indexOf(want) === 0)[0] || null;
+    let vs = voiceCache.length ? voiceCache : refreshVoices();
+    if(!vs.length) vs = refreshVoices();
+    const want = String(lang || 'en').slice(0,2).toLowerCase();
+    const hit = vs.filter(v => (v.lang || '').toLowerCase().indexOf(want) === 0);
+    return hit.find(v => v.localService) || hit[0] || null;
   }catch(e){ return null; }
 }
-function doSpeakWord(t, lang){
-  try{
-    const synth = window.speechSynthesis;
-    if(synth.resume) synth.resume();
-    const u = new window.SpeechSynthesisUtterance(t);
-    u.lang = lang;
-    u.rate = 0.95;
-    u.volume = 1;
-    const v = pickVoice(lang);
-    if(v) u.voice = v;
-    lastSpokenUtter = u;       // 持有引用，避免被回收后无声
-    synth.speak(u);
-  }catch(e){ playTTS(t, lang); }
+function doSpeakNow(t, lang){
+  const synth = window.speechSynthesis;
+  try{ if(synth.resume) synth.resume(); }catch(e){}
+  let started = false, fellBack = false;
+  const u = new window.SpeechSynthesisUtterance(t);
+  u.lang = lang;
+  u.rate = 0.95;
+  u.volume = 1;
+  const v = pickVoice(lang);
+  if(v) u.voice = v;
+  u.onstart = () => { started = true; };
+  u.onerror = () => { if(!started && !fellBack){ fellBack = true; playTTS(t, lang); } };
+  lastSpokenUtter = u;       // 持有引用，避免被回收后无声
+  try{ synth.speak(u); }
+  catch(e){ playTTS(t, lang); return; }
+  // 有的内核会「静默成功」：900ms 还没起声，直接换成联网音频
+  setTimeout(() => {
+    if(!started && !fellBack){
+      fellBack = true;
+      try{ synth.cancel(); }catch(e){}
+      playTTS(t, lang);
+    }
+  }, 900);
 }
-/* 兜底朗读：浏览器没有 Web Speech（部分手机内置浏览器/WebView 不支持），
-   或者系统里没装这门语言的发音包时，直接播放有道词典的发音音频 */
+/* 兜底朗读：浏览器没有 Web Speech（微信内置浏览器 / 各种 WebView 常常不支持），
+   或者系统里没装这门语言的发音包时，直接播放有道词典的发音音频。
+   同一段文字只下载一次，第二次点击立刻出声。 */
 let ttsAudio = null;
-function playTTS(t, lang){
+const ttsCache = new Map();          // text|lang -> HTMLAudioElement（已预取）
+let audioUnlocked = false;
+function ttsUrl(t, lang){
   const lg = lang || detectLang(t);
+  const q = lg.indexOf('en') === 0 ? ('?type=2&audio=' + encodeURIComponent(t))
+          : lg.indexOf('ja') === 0 ? ('?le=ja&audio=' + encodeURIComponent(t))
+          : lg.indexOf('ko') === 0 ? ('?le=ko&audio=' + encodeURIComponent(t))
+          : ('?le=zh&audio=' + encodeURIComponent(t));
+  return 'https://dict.youdao.com/dictvoice' + q;
+}
+function prefetchTTS(t, lang){
+  const text = String(t || '').trim();
+  if(!text) return null;
+  const lg = lang || detectLang(text);
+  const key = text + '|' + lg;
+  let a = ttsCache.get(key);
+  if(a) return a;
   try{
-    if(ttsAudio){ try{ ttsAudio.pause(); }catch(e){} ttsAudio = null; }
-    const q = lg.indexOf('en') === 0 ? ('?type=2&audio=' + encodeURIComponent(t))
-            : lg.indexOf('ja') === 0 ? ('?le=ja&audio=' + encodeURIComponent(t))
-            : lg.indexOf('ko') === 0 ? ('?le=ko&audio=' + encodeURIComponent(t))
-            : ('?le=zh&audio=' + encodeURIComponent(t));
-    const a = new Audio('https://dict.youdao.com/dictvoice' + q);
+    a = new Audio();
+    a.preload = 'auto';
+    a.src = ttsUrl(text, lg);
+    ttsCache.set(key, a);
+    if(ttsCache.size > 48){ const first = ttsCache.keys().next().value; ttsCache.delete(first); }
+    return a;
+  }catch(e){ return null; }
+}
+/* 微信 / iOS 要求音频必须由用户手势解锁，第一次点击时放一段静音把它唤醒 */
+function unlockAudio(){
+  if(audioUnlocked) return;
+  audioUnlocked = true;
+  try{
+    const a = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=');
+    a.volume = 0;
+    const p = a.play(); if(p && p.catch) p.catch(() => {});
+  }catch(e){}
+  try{ refreshVoices(); }catch(e){}
+}
+function playTTS(t, lang){
+  const text = String(t || '').trim();
+  if(!text) return;
+  const lg = lang || detectLang(text);
+  unlockAudio();
+  try{
+    if(ttsAudio){ try{ ttsAudio.pause(); }catch(e){} }
+    let a = ttsCache.get(text + '|' + lg) || prefetchTTS(text, lg);
+    if(!a){ toast('朗读失败：请检查网络，或在浏览器里打开这个链接'); return; }
     ttsAudio = a;
+    try{ a.currentTime = 0; }catch(e){}
     const p = a.play();
-    if(p && p.catch) p.catch(() => toast('朗读失败：请检查网络，或在浏览器里打开这个链接'));
+    if(p && p.catch) p.catch(() => {
+      // 微信里偶发被拦：重设一次 src 再播，成功率更高
+      try{
+        a.src = ttsUrl(text, lg) + '&t=' + Date.now();
+        const p2 = a.play();
+        if(p2 && p2.catch) p2.catch(() => toast('朗读失败：请检查网络，或在浏览器里打开这个链接'));
+      }catch(e){ toast('朗读失败：请检查网络，或在浏览器里打开这个链接'); }
+    });
   }catch(e){ toast('朗读失败：请检查网络，或在浏览器里打开这个链接'); }
 }
 function speakWord(txt){
-  const t = (txt || '').trim();
+  const t = String(txt || '').trim();
   if(!t) return;
   const lang = detectLang(t);
   const canSpeech = ('speechSynthesis' in window) && (typeof window.SpeechSynthesisUtterance === 'function');
   if(!canSpeech){ playTTS(t, lang); return; }
   const synth = window.speechSynthesis;
   try{ if(synth.cancel) synth.cancel(); }catch(e){}
-  {
-    const vs = (synth.getVoices ? synth.getVoices() : []) || [];
-    if(!vs.length){
-      // 语音引擎还没加载完：等一次 voiceschanged，最多等 1.2 秒
-      let fired = false;
-      const fire = () => {
-        if(fired) return; fired = true;
-        if(pickVoice(lang)) doSpeakWord(t, lang);
-        else playTTS(t, lang);          // 没装这门语言的发音包，就走联网音频
-      };
-      try{ synth.onvoiceschanged = fire; }catch(e){}
-      setTimeout(fire, 500);
-      return;
-    }
-    if(!pickVoice(lang)){ playTTS(t, lang); return; }
-  }
-  setTimeout(() => doSpeakWord(t, lang), 40);
+  // 语音包已经就绪：立刻发音，不再等
+  if(pickVoice(lang)){ doSpeakNow(t, lang); return; }
+  // 引擎首次加载：最多等 150ms，超时就用联网音频，避免点了半天没声音
+  let fired = false;
+  const fire = () => {
+    if(fired) return; fired = true;
+    if(pickVoice(lang)) doSpeakNow(t, lang);
+    else playTTS(t, lang);
+  };
+  try{ synth.addEventListener('voiceschanged', fire, { once:true }); }catch(e){}
+  setTimeout(fire, 150);
 }
+
+/* 页面上所有「① 内容」都挂 data-say：点一下就朗读，不用先打开释义卡。
+   微信 / 浏览器 / 各种 WebView 都走这条统一入口。 */
+document.addEventListener('click', (e) => {
+  const el = e.target && e.target.closest ? e.target.closest('[data-say]') : null;
+  if(!el) return;
+  // 学习页的词块沿用「朗读」开关；其它地方的 ① 内容随时可点读
+  if(el.hasAttribute('data-say-auto') && !(state.settings && state.settings.readAloud)) return;
+  const txt = el.getAttribute('data-say') || '';
+  if(txt) speakWord(txt);
+});
+/* 第一次按屏幕就把音频与语音引擎解锁，微信里后续点击才不会被拦 */
+['pointerdown', 'touchstart'].forEach(ev => {
+  document.addEventListener(ev, () => unlockAudio(), { passive:true });
+});
 function playVoice(m){
   if(!m || !m.text){ toast('这条语音没有可朗读的文字'); return; }
   if(!('speechSynthesis' in window)){ toast('这个设备不支持语音播放'); return; }
@@ -8282,9 +8438,10 @@ function renderSetView(){
     row.dataset.idx = idx;
     row.innerHTML =
       (setSelOn ? '<label class="sel"><input type="checkbox" data-sel="' + idx + '"' + (picked ? ' checked' : '') + '></label>' : '') +
-      '<div class="en">' + escapeHtml(it.en) + '</div>' +
+      '<div class="en" data-say="' + escapeHtml(it.en) + '" title="点一下朗读">' + escapeHtml(it.en) + '</div>' +
       '<div class="zh">' + escapeHtml(it.zh || '') +
         (it.pos ? '<div class="si-meta">' + escapeHtml(it.pos) + '</div>' : '') +
+        (it.root ? '<div class="si-meta">' + escapeHtml(it.root) + '</div>' : '') +
       '</div>' +
       (setSelOn ? '' : '<div class="acts"><button data-act="edit">改</button><button data-act="move">移</button><button data-act="del" class="danger">删</button></div>');
     frag.appendChild(row);
@@ -9158,6 +9315,8 @@ function renderPage(){
       el.style.top = m.y.toFixed(1) + 'px';
       el.style.setProperty('--d', (Math.random()*0.16).toFixed(2) + 's');
       el.dataset.key = keyOf(m.it);
+      el.dataset.say = m.it.en;
+      el.dataset.sayAuto = '1';
       el.setAttribute('role','button');
       el.setAttribute('tabindex','0');
       el._item = m.it;
@@ -9193,7 +9352,6 @@ field.addEventListener('click', (e) => {
     save();
   }
   showCard(el, activeItem);
-  if(state.settings && state.settings.readAloud) speakWord(activeItem.en);
 });
 field.addEventListener('keydown', (e) => {
   if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); e.target.click(); }
@@ -9572,7 +9730,8 @@ function showCard(el, item){
   cardActs.style.display = (item.type === 'sentence' && !item.zh) ? 'none' : '';
 
   card.classList.add('show');
-  const wr = el.getBoundingClientRect();
+  // 顺手把这条的联网发音预取下来：点了喇叭就是秒出
+  try{ prefetchTTS(item.en); }catch(e){}  const wr = el.getBoundingClientRect();
   const cr = card.getBoundingClientRect();
   const gap = 9;
   let left = wr.left + wr.width/2 - cr.width/2;
@@ -9946,7 +10105,7 @@ function openList(mode){
     items.forEach(it => {
       const row = document.createElement('div');
       row.className = 'row-item';
-      row.innerHTML = '<div class="en">' + escapeHtml(it.en) + '</div>' +
+      row.innerHTML = '<div class="en" data-say="' + escapeHtml(it.en) + '" title="点一下朗读">' + escapeHtml(it.en) + '</div>' +
         '<div class="zh">' + (it.pos ? '<i style="color:#9aa79f;font-style:italic;font-size:11px;">' + escapeHtml(it.pos) + '</i> ' : '') +
         escapeHtml(it.zh || '') + '</div>' +
         '<button class="rm" title="移出">×</button>';
@@ -10292,7 +10451,7 @@ function showPreview(items, source){
   items.slice(0, 200).forEach(it => {
     const row = document.createElement('div');
     row.className = 'prow';
-    row.innerHTML = '<div class="p-en">' + escapeHtml(it.en) + (it.pos ? ' <span style="color:#a9b6ad;font-style:italic;">' + escapeHtml(it.pos) + '</span>' : '') + '</div>' +
+    row.innerHTML = '<div class="p-en" data-say="' + escapeHtml(it.en) + '" title="点一下朗读">' + escapeHtml(it.en) + (it.pos ? ' <span style="color:#a9b6ad;font-style:italic;">' + escapeHtml(it.pos) + '</span>' : '') + '</div>' +
       '<div class="p-zh">' + escapeHtml(it.zh) + '</div>' +
       (it.root ? '<div class="p-zh" style="color:#a9a9a0;font-size:11px;">' + escapeHtml(it.root) + '</div>' : '');
     frag.appendChild(row);
@@ -10655,12 +10814,28 @@ setInterval(() => { if(currentUser && !document.hidden) refreshSocialFromCloud(f
 /* 朗读引擎预热：多数浏览器第一次 getVoices() 是空的，这里提前触发，点朗读时不必再等 */
 try{
   if(window.speechSynthesis){
-    window.speechSynthesis.getVoices();
-    window.speechSynthesis.addEventListener('voiceschanged', () => {
-      try{ window.speechSynthesis.getVoices(); }catch(e){}
-    });
+    refreshVoices();
+    window.speechSynthesis.addEventListener('voiceschanged', () => { try{ refreshVoices(); }catch(e){} });
+    // 有些内核要等页面跑起来才会填充语音包，隔几秒再补查一次
+    setTimeout(refreshVoices, 1200);
   }
 }catch(e){}
+/* 微信 / iOS：必须在用户手势里解锁音频，页面一有触摸就先唤醒 */
+document.addEventListener('WeixinJSBridgeReady', () => { try{ unlockAudio(); }catch(e){} }, false);
+document.addEventListener('touchstart', () => { try{ unlockAudio(); }catch(e){} }, { passive:true, once:true });
+document.addEventListener('mousedown', () => { try{ unlockAudio(); }catch(e){} }, { passive:true, once:true });
+
+/* 切回页面 / 从微信切回浏览器时立刻核对一次云端，避免两边各看各的旧数据 */
+let lastWakeSync = 0;
+function wakeSync(){
+  if(!currentUser || cloudBlocked) return;
+  if(Date.now() - lastWakeSync < 6000) return;
+  lastWakeSync = Date.now();
+  try{ reconcileNow(currentUser, { toast:false }); }catch(e){}
+}
+document.addEventListener('visibilitychange', () => { if(!document.hidden) wakeSync(); });
+window.addEventListener('focus', wakeSync);
+window.addEventListener('pageshow', wakeSync);
 </script>
 </body>
 </html>
