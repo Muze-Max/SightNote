@@ -1230,6 +1230,13 @@
   .fx-line{display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;}
   .fx-k{font-size:11px;color:#6d6d64;letter-spacing:.02em;}
   .fx-dash{font-size:11px;color:#a5a59a;}
+  .fx-chip{
+    display:inline-flex;align-items:center;gap:4px;padding:4px 9px;border:1px solid var(--line);
+    border-radius:999px;font-size:11px;color:#6d6d64;cursor:pointer;user-select:none;background:none;
+  }
+  .fx-chip.on{border-color:#c9a12f;background:#fbf3d9;color:#8a6a13;}
+  .fx-chip input{width:11px;height:11px;accent-color:#c9a12f;margin:0;}
+  .fx-chip input:disabled + span{color:#b9b9b0;}
   .fx-tip{font-size:10.5px;color:#b4795a;}
   .fx-bar input[type="date"]{
     padding:5px 8px;border:1px solid var(--line);border-radius:8px;
@@ -2241,10 +2248,12 @@
           <input type="date" id="fxFrom">
           <span class="fx-dash">—</span>
           <input type="date" id="fxTo">
+          <label class="fx-chip"><input type="checkbox" id="fxRegAll">不限</label>
         </div>
         <div class="fx-line">
           <span class="fx-k">消息时效至</span>
           <input type="date" id="fxExp">
+          <label class="fx-chip"><input type="checkbox" id="fxExpForever">永久</label>
           <span class="fx-tip" id="fxEditTip"></span>
           <button class="btn-line" id="fxApply" type="button">应用</button>
         </div>
@@ -7548,7 +7557,7 @@ function renderChat(){
         const scTxt = fxScopeText(m);
         const scEl = document.createElement('span');
         scEl.className = 'fx-scope';
-        scEl.textContent = (scTxt || '不限接收用户 · 长期有效') + ' · 点此修改';
+        scEl.textContent = fxScopeText(m) + ' · 点此修改';
         el.appendChild(scEl);
         el.style.cursor = 'pointer';
         el.addEventListener('click', () => {
@@ -7622,7 +7631,8 @@ function fxScopeOf(m){ const s = (m && m.scope) || {}; return { regFrom: s.regFr
 function fxScopeText(m){
   const sc = fxScopeOf(m), parts = [];
   if(sc.regFrom || sc.regTo) parts.push('注册 ' + (sc.regFrom || '不限') + ' → ' + (sc.regTo || '不限'));
-  if(sc.exp) parts.push('时效至 ' + sc.exp);
+  else parts.push('注册时间不限');
+  parts.push(sc.exp ? ('时效至 ' + sc.exp) : '永久有效');
   return parts.join(' · ');
 }
 /* 这条飞信对某个注册时间的用户是否有效（含当天，时效按截止日 23:59:59） */
@@ -7635,11 +7645,39 @@ function fxApplies(m, joinedAt, now){
   if(exp !== null && now > exp + 86399999) return false;
   return true;
 }
-function fxInputs(){ return { regFrom: ($('#fxFrom')||{}).value || '', regTo: ($('#fxTo')||{}).value || '', exp: ($('#fxExp')||{}).value || '' }; }
+function fxInputs(){
+  const regAll = !!($('#fxRegAll') && $('#fxRegAll').checked);
+  const forever = !!($('#fxExpForever') && $('#fxExpForever').checked);
+  return {
+    regFrom: regAll ? '' : ((($('#fxFrom')||{}).value) || ''),
+    regTo: regAll ? '' : ((($('#fxTo')||{}).value) || ''),
+    exp: forever ? '' : ((($('#fxExp')||{}).value) || '')
+  };
+}
+/* 「不限 / 永久」勾上时，把对应日期框置灰并清空 */
+function fxSyncChecks(){
+  const box = $('#fxScopeBar');
+  if(!box) return;
+  const regAll = $('#fxRegAll'), forever = $('#fxExpForever');
+  if(regAll){
+    if(regAll.checked){ if($('#fxFrom')) $('#fxFrom').value = ''; if($('#fxTo')) $('#fxTo').value = ''; }
+    ['#fxFrom','#fxTo'].forEach(sel => { if($(sel)) $(sel).disabled = regAll.checked; });
+    regAll.parentNode.classList.toggle('on', regAll.checked);
+  }
+  if(forever){
+    if(forever.checked && $('#fxExp')) $('#fxExp').value = '';
+    if($('#fxExp')) $('#fxExp').disabled = forever.checked;
+    forever.parentNode.classList.toggle('on', forever.checked);
+  }
+}
 function fxFillInputs(sc){
-  if($('#fxFrom')) $('#fxFrom').value = (sc && sc.regFrom) || '';
-  if($('#fxTo')) $('#fxTo').value = (sc && sc.regTo) || '';
-  if($('#fxExp')) $('#fxExp').value = (sc && sc.exp) || '';
+  sc = sc || {};
+  if($('#fxFrom')) $('#fxFrom').value = sc.regFrom || '';
+  if($('#fxTo')) $('#fxTo').value = sc.regTo || '';
+  if($('#fxExp')) $('#fxExp').value = sc.exp || '';
+  if($('#fxRegAll')) $('#fxRegAll').checked = !(sc.regFrom || sc.regTo);
+  if($('#fxExpForever')) $('#fxExpForever').checked = !sc.exp;
+  fxSyncChecks();
 }
 /* 把范围挂到消息上：发送时读输入框，没填就不限 */
 function fxApplyScopeTo(m){
@@ -7839,6 +7877,8 @@ if($('#chatText')) $('#chatText').addEventListener('keydown', e => {
 if($('#shareSet')) $('#shareSet').addEventListener('click', () => openSharePick('set'));
 if($('#shareWords')) $('#shareWords').addEventListener('click', () => openSharePick('words'));
 if($('#fxApply')) $('#fxApply').addEventListener('click', applyFxScope);
+if($('#fxRegAll')) $('#fxRegAll').addEventListener('change', fxSyncChecks);
+if($('#fxExpForever')) $('#fxExpForever').addEventListener('change', fxSyncChecks);
 async function applyFxScope(){
   const sc = fxInputs();
   if(sc.regFrom && sc.regTo && fxDay(sc.regFrom) > fxDay(sc.regTo)){ toast('注册时间的起始要早于结束'); return; }
@@ -7846,7 +7886,7 @@ async function applyFxScope(){
   state.settings.fxScope = { regFrom: sc.regFrom, regTo: sc.regTo, exp: sc.exp };
   save();
   if(!fxEditTarget){
-    toast('已设置：之后发的飞信按这个范围发送');
+    toast('已设置：之后发的飞信按' + ((sc.regFrom||sc.regTo) ? ('注册 ' + (sc.regFrom||'不限') + '→' + (sc.regTo||'不限')) : '全部用户') + '、' + (sc.exp ? ('时效至 ' + sc.exp) : '永久有效') + ' 发送');
     return;
   }
   // 改一条已经发出去的飞信
