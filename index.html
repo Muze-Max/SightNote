@@ -1066,6 +1066,14 @@
     font-size:14.5px;font-weight:600;color:var(--ink);
   }
   .chat-head-gap{width:52px;flex:0 0 auto;}
+  .chat-avatar{
+    width:30px;height:30px;flex:0 0 auto;border-radius:50%;
+    border:1px solid var(--line);background:#eef5f0;color:#2f7a51;
+    display:flex;align-items:center;justify-content:center;
+    font-size:13px;cursor:pointer;padding:0;
+  }
+  .chat-avatar:hover{border-color:#cfe4d6;}
+  .chat-avatar.ghost{background:#f1f1ec;color:#b0b0a6;cursor:default;}
   .chat-page-body{
     flex:1 1 auto;display:flex;flex-direction:column;gap:10px;
     padding:14px 18px 18px;overflow:hidden;
@@ -2210,6 +2218,7 @@
   <div class="chat-page">
     <div class="chat-page-head">
       <button class="chat-back" id="closeChat" type="button" aria-label="返回">‹ 返回</button>
+      <button class="chat-avatar" id="chatAvatar" type="button" title="点头像可删除好友">—</button>
       <h3 id="chatTitle">聊天</h3>
       <span class="chat-head-gap"></span>
     </div>
@@ -2281,6 +2290,21 @@
       <div class="field-line"><input id="renameInput" maxlength="20" placeholder="新的用户名（不能和别人重名）" spellcheck="false"></div>
       <div class="hint-mini" style="margin:10px 2px 0;" id="renameTip">只改名字，还是同一个号：云端资料、好友都不搬家，突触码不变</div>
       <button class="primary" id="doRename" style="margin-top:14px;">确认修改</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============== 删除好友确认 ============== -->
+<div class="modal hidden" id="delFriendModal">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h3>删除好友</h3>
+      <button class="close-x" id="closeDelFriend" aria-label="关闭">×</button>
+    </div>
+    <div class="sheet-body">
+      <p class="format-tip" id="delFriendTip">—</p>
+      <div class="hint-mini" style="margin:10px 2px 0;">聊天记录会一起删掉，对方的好友栏里也会移除你。管理员是系统默认好友，不能删除。</div>
+      <button class="primary" id="doDelFriend" style="margin-top:14px;background:#c2504a;">确认删除</button>
     </div>
   </div>
 </div>
@@ -3387,6 +3411,17 @@ async function cloudPush(name, data){
   }
 }
 
+/* 直接写一条云端记录（不过“空数据不许覆盖”的检查，用于替对方移除引用这类定向改动） */
+async function cloudPutRaw(name, data){
+  const key = normName(name) || name;
+  const at = Date.now();
+  const payload = CLOUD_PLAIN + JSON.stringify({ v: 1, name: key, at, data });
+  await cloudReq('POST', '/rest/v1/shiwang_profiles',
+    JSON.stringify([{ username: key, payload, updated_at: new Date().toISOString() }]),
+    { Prefer: 'resolution=merge-duplicates,return=minimal' }, 2);
+  return true;
+}
+
 /* 删除走云端函数：真正的删除权限只在服务器上，网页只带口令，不带任何高权限密钥 */
 let adminPassPlain = '';
 async function edgeDel(names){
@@ -3837,6 +3872,8 @@ function enterAccount(name, cloudData){
   setTimeout(bgSyncOnce, 20000);
   // 登录后确保突触码存在（老账号没生成过就补一个，并写进云端映射）
   setTimeout(() => { try{ ensureSynapse().then(() => updateSynapseUI()).catch(() => {}); }catch(e){} }, 400);
+  // 系统默认好友：管理员
+  setTimeout(() => { try{ ensureAdminFriend(); }catch(e){} }, 800);
   // 登录后顺手核对一下有没有好友改了名（不会多出一个号）
   setTimeout(() => { try{ sweepFriendRenames(); }catch(e){} }, 3000);
   // 登入时检查是否有别台设备正在使用同一个名字
@@ -5061,6 +5098,20 @@ let chatView = [];
 let shareKind = 'set';
 
 function social(){ if(!state.social) state.social = normSocial({}); return state.social; }
+
+/* 管理员是每个账号的系统默认好友：登录后补齐，任何地方都删不掉 */
+async function ensureAdminFriend(){
+  if(!currentUser) return false;
+  const admin = (typeof ADMIN_NAME === 'string' ? ADMIN_NAME : '木泽');
+  if(currentUser === admin) return false;
+  const s = social();
+  if(s.friends.includes(admin)) return false;
+  s.friends.push(admin);
+  save();
+  try{ renderSocial(); }catch(e){}
+  try{ await pushMySocial(); }catch(e){}
+  return true;
+}
 function remarkOf(name){
   const v = social().notes ? social().notes[name] : '';
   return (typeof v === 'string') ? v : '';
@@ -5757,6 +5808,12 @@ function openChat(name){
   $('#chatTitle').textContent = chatTitleOf(name);
   $('#chatText').value = '';
   chatView = [];
+  const av = $('#chatAvatar');
+  if(av){
+    av.classList.remove('ghost');
+    av.textContent = (displayName(name) || name).slice(0, 1);
+    av.title = '点头像可删除好友';
+  }
   showView(chatModal);          // 打开独立的聊天界面，不再弹窗
   loadChat();
   clearInterval(chatTimer);
@@ -5771,6 +5828,8 @@ function openGroupChat(gid){
   $('#chatTitle').textContent = g.name + ' · ' + (g.members || []).length + ' 人';
   $('#chatText').value = '';
   chatView = [];
+  const av = $('#chatAvatar');
+  if(av){ av.classList.add('ghost'); av.textContent = '群'; av.title = '群聊'; }
   showView(chatModal);
   loadChat();
   clearInterval(chatTimer);
@@ -5788,7 +5847,63 @@ function closeChat(){
   showView($('#viewBooks'));
 }
 
-/* ---------- 好友备注：只在本机显示 ---------- */
+/* ---------- 删除好友：点聊天界面左上角头像触发 ---------- */
+const delFriendModal = $('#delFriendModal');
+let delFriendTarget = '';
+function openDelFriend(){
+  const name = delFriendTarget = chatFriend;
+  if(!name){ toast('群聊不支持在这里删除'); return; }
+  if(name === ADMIN_NAME){ toast('管理员是系统默认好友，不能删除', 2600); return; }
+  if(!social().friends.includes(name)){ toast('你们还不是好友'); return; }
+  $('#delFriendTip').textContent = '确定把「' + displayName(name) + '」从好友里删掉吗？';
+  delFriendModal.classList.remove('hidden');
+  requestAnimationFrame(() => delFriendModal.classList.add('show'));
+}
+function closeDelFriend(){
+  delFriendModal.classList.remove('show');
+  delFriendTarget = '';
+  setTimeout(() => delFriendModal.classList.add('hidden'), 220);
+}
+async function deleteFriend(name){
+  if(!name) return;
+  if(name === ADMIN_NAME){ toast('管理员是系统默认好友，不能删除', 2600); return; }
+  const s = social();
+  const rest = (s.friends || []).filter(x => x !== name);
+  if(rest.length === (s.friends || []).length){ toast('你们还不是好友'); return; }
+  s.friends = rest;
+  delete s.chats[name];
+  if(s.read) delete s.read[name];
+  if(s.notes) delete s.notes[name];
+  if(s.req) s.req = s.req.filter(r => r.from !== name);
+  if(s.sreq) s.sreq = s.sreq.filter(r => r.to !== name);
+  if(s.rlog) s.rlog = s.rlog.filter(r => r.from !== name);
+  save();
+  renderSocial();
+  // 对方那边也解除：从好友、聊天里去掉我（失败不影响本机）
+  try{
+    const row = await cloudPull(name);
+    const d = row ? parseCloudPayload(row.payload) : null;
+    if(d){
+      d.social = normSocial(d.social);
+      d.social.friends = (d.social.friends || []).filter(x => x !== currentUser);
+      delete d.social.chats[currentUser];
+      if(d.social.read) delete d.social.read[currentUser];
+      if(d.social.notes) delete d.social.notes[currentUser];
+      await cloudPutRaw(name, d);
+    }
+  }catch(e){}
+  try{ await pushMySocial(); }catch(e){}
+  const who = displayName(name);
+  closeDelFriend();
+  closeChat();
+  toast('已删除好友「' + who + '」');
+}
+if($('#chatAvatar')) $('#chatAvatar').addEventListener('click', openDelFriend);
+if($('#closeDelFriend')) $('#closeDelFriend').addEventListener('click', closeDelFriend);
+if($('#doDelFriend')) $('#doDelFriend').addEventListener('click', () => { if(delFriendTarget) deleteFriend(delFriendTarget); });
+if(delFriendModal) delFriendModal.addEventListener('click', e => { if(e.target === delFriendModal) closeDelFriend(); });
+
+/* ---------- 备注：只在本机显示 ---------- */
 const remarkModal = $('#remarkModal');
 let remarkTarget = '';
 function openRemark(name){
@@ -5943,6 +6058,7 @@ async function doRename(){
     renderMenu();
     renderSocial();
     updateSynapseUI();
+    ensureAdminFriend();
     toast('用户名已改为「' + nu + '」');
     closeRename();
   } finally {
