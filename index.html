@@ -5486,7 +5486,7 @@ async function doLogin(){
         return;
       }
       if(allow.indexOf(normName(raw)) < 0){
-        toast('「' + raw + '」还没有被准许注册，请找管理员在 视窗 → 管理员 → 地球村 里加上这个用户名', 4200);
+        toast('用户异常，禁止登录', 4200);
         return;
       }
     }
