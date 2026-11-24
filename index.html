@@ -10620,6 +10620,7 @@ field.addEventListener('keydown', (e) => {
 let annotOn = false;         // 批注模式开关
 let annotKey = '';           // 当前单词的 key
 let annotColor = '#23231f';
+let annotInkColor = '#23231f';   // 手写浮窗的笔色，与打字窗字色无关
 let annotSize = 16;
 let annotPenSize = 16;       // 手写浮窗的笔粗细
 let annotEraseSize = 24;     // 橡皮半径（屏幕 px）
@@ -10772,6 +10773,7 @@ function annotSave(skipRender){
     html: html,
     size: annotSize,
     color: annotColor,
+    ink: annotInkColor,
     pen: annotPenSize,
     esz: annotEraseSize,
     lock: !!annotLock,
@@ -10802,7 +10804,7 @@ function annotSyncUI(){
   const af = $('#afEraser');
   if(af){ af.classList.toggle('on', annotErase); af.textContent = annotErase ? '橡皮(开)' : '橡皮'; }
   if(annotFloatEl){
-    annotFloatEl.querySelectorAll('.cdot').forEach(d => d.classList.toggle('on', d.dataset.color === annotColor));
+    annotFloatEl.querySelectorAll('.cdot').forEach(d => d.classList.toggle('on', d.dataset.color === annotInkColor));
     annotFloatEl.querySelectorAll('.af-esz').forEach(b => b.classList.toggle('on', +b.dataset.esz === annotEraseSize));
     const fsz = $('#afSizeNow');
     if(fsz) fsz.textContent = String(annotPenSize);
@@ -10833,6 +10835,7 @@ function openAnnot(item, el){
     : '';
   annotSize = rec && rec.size ? Math.min(32, Math.max(12, rec.size)) : 16;
   annotColor = rec && rec.color ? rec.color : '#23231f';
+  annotInkColor = rec && rec.ink ? rec.ink : '#23231f';
   annotPenSize = rec && rec.pen ? Math.min(40, Math.max(6, rec.pen)) : 16;
   annotEraseSize = rec && rec.esz ? Math.min(60, Math.max(8, rec.esz)) : 24;
   annotErase = false;
@@ -10946,10 +10949,10 @@ $('#afClear').addEventListener('click', () => {
   toast('已清空手写');
 });
 
-/* 手写浮窗：颜色 / 笔粗细 / 橡皮大小 */
+/* 手写浮窗：颜色 / 笔粗细 / 橡皮大小（笔色与打字窗字色互不影响） */
 annotFloatEl.querySelectorAll('.cdot').forEach(d => {
   d.addEventListener('click', () => {
-    annotColor = d.dataset.color;
+    annotInkColor = d.dataset.color;
     annotSyncUI();
     annotSave(true);
   });
@@ -11163,7 +11166,7 @@ function annotBindDraw(el, gate){
     if(annotErase){ annotEraseAt(p, el); return; }
     annotLastSurface = 'draw';
     try{ el.setPointerCapture(e.pointerId); }catch(err){}
-    annotCur = { c: annotColor, w: annotPenWidth(e, el), pts: [p], _el: el };
+    annotCur = { c: (el === annotFloatCanvas ? annotInkColor : annotColor), w: annotPenWidth(e, el), pts: [p], _el: el };
     annotDrawAll();
   });
   el.addEventListener('pointermove', (e) => {
