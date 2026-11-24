@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <!-- 朗读音频来自第三方发音接口，它只接受「不带来源页」的请求，所以整页统一不发 Referer -->
 <meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<meta name="googlebot" content="noindex, nofollow">
 <title>SightNote · 视网速记</title>
 <!--
   ================= 视网速记 · 单文件源码说明 =================
@@ -2357,6 +2359,7 @@
         <button class="btn-line" id="adminRefresh" style="padding:8px 14px;font-size:11px;">刷新名单</button>
         <button class="btn-line hidden" id="adminCleanHist" style="padding:8px 12px;font-size:11px;">清理历史行</button>
         <button class="btn-line" id="adminPurgeTomb" style="padding:8px 12px;font-size:11px;">清理注销行</button>
+        <button class="btn-line" id="adminChangePass" style="padding:8px 12px;font-size:11px;">改安全员口令</button>
       </div>
       <div class="admin-stat" id="adminStat">点「刷新名单」读取云端用户</div>
       <div id="adminList"></div>
@@ -3207,6 +3210,9 @@ async function cloudPeek(name){
 let currentUser = '';
 let renameHop = 0;
 try{ currentUser = localStorage.getItem(CURRENT_KEY) || ''; }catch(e){ currentUser = ''; }
+// 刷新页面后沿用本机记着的账号写入凭据（换设备/改了口令才需要重输）
+let writeKey = '';
+try{ if(currentUser) writeKey = localStorage.getItem('sww-acct@' + currentUser) || ''; }catch(e){}
 
 const profileKey = name => PROFILE_PREFIX + name;
 
@@ -3522,12 +3528,90 @@ function cloudReqOnce(method, path, body, extra){
 
 function cloudReq(method, path, body, extra, tries){
   tries = tries || 1;
+  // 兼容所有老调用：写档案的 POST 一律改走服务器函数 sww_save_row（带账号凭据校验）
+  if(method === 'POST' && path === '/rest/v1/shiwang_profiles' && body){
+    try{
+      const rows = JSON.parse(body);
+      const r0 = rows && rows[0];
+      if(r0 && r0.username){
+        path = '/rest/v1/rpc/sww_save_row';
+        body = JSON.stringify({ p_user: r0.username, p_key: acctKeyFor(r0.username), p_old: acctOldFor(r0.username), p_payload: r0.payload, p_updated: r0.updated_at });
+        extra = { Prefer: 'return=minimal' };
+      }
+    }catch(e){}
+  }
   return cloudReqOnce(method, path, body, extra).catch(function(err){
     if(tries <= 1) throw err;
     return new Promise(function(r){ setTimeout(r, 900); }).then(function(){
       return cloudReq(method, path, body, extra, tries - 1);
     });
   });
+}
+
+/* ---------- 云端写入凭据：网页端已经没有直写权限，所有写都走服务器函数 ----------
+   sww_save_row 会在库里核对这条记录的「账号写入凭据」：
+   · 第一次写入时凭据为空 → 接受，并把这次的凭据登记进私有表 swiwang_guards；
+   · 之后凭据不符 → 直接拒绝（BAD_KEY），所以拿到公开 anon key 也没法改别人的档案。
+   凭据 = SHA256('sww-acct:' + 账号口令)，和公开的 meta.lock.hash 用的是不同盐，不能互相推导。 */
+const ACCT_KEY_KEY = 'sww-acct@';
+const ACCT_OLD_KEY = 'sww-acct-old@';
+const SYS_ADMIN_ROWS = ['#口令#', '#传信#', '#讲解#'];
+let sysKey = '';
+try{ sysKey = localStorage.getItem('sww-syskey') || ''; }catch(e){}
+function sysKeySet(k, old){
+  sysKey = k || '';
+  try{
+    if(k) localStorage.setItem('sww-syskey', k); else localStorage.removeItem('sww-syskey');
+    if(old) localStorage.setItem('sww-syskey-old', old);
+  }catch(e){}
+}
+function sysKeyOld(){ try{ return localStorage.getItem('sww-syskey-old') || ''; }catch(e){ return ''; } }
+function acctKeyGet(name){
+  try{ return localStorage.getItem(ACCT_KEY_KEY + name) || ''; }catch(e){ return ''; }
+}
+function acctKeySet(name, k){
+  try{
+    const old = localStorage.getItem(ACCT_KEY_KEY + name) || '';
+    if(old && k && old !== k) localStorage.setItem(ACCT_OLD_KEY + name, old);
+    if(k) localStorage.setItem(ACCT_KEY_KEY + name, k); else localStorage.removeItem(ACCT_KEY_KEY + name);
+  }catch(e){}
+}
+function acctKeyOfPass(pw){
+  return hashPass(pw, 'sww-acct:');
+}
+/* 一行云端记录该用谁的凭据：管理员系统行用管理员凭据，历史槽位跟本人，其余按账号 */
+function rowOwner(name){
+  const key = normName(name) || name;
+  const m = key.match(/^(.+)#H\d+$/);
+  return m ? m[1] : key;
+}
+function acctKeyFor(name){
+  const key = normName(name) || name;
+  if(SYS_ADMIN_ROWS.indexOf(key) >= 0) return sysKey;
+  const owner = rowOwner(key);
+  if(owner === (normName(currentUser) || currentUser)) return writeKey || acctKeyGet(owner);
+  return acctKeyGet(owner);
+}
+function acctOldFor(name){
+  const key = normName(name) || name;
+  if(SYS_ADMIN_ROWS.indexOf(key) >= 0) return sysKeyOld();
+  const owner = rowOwner(key);
+  try{ return localStorage.getItem(ACCT_OLD_KEY + owner) || ''; }catch(e){ return ''; }
+}
+/* 还没有口令的老账号：进门后让他补一个，云端写入权才算被锁住 */
+async function ensureAccountPassphrase(name, data){
+  const lock = data && data.meta && data.meta.lock;
+  if(lock && lock.on && lock.hash) return;
+  if(!Object.keys(state.known || {}).length && !state.libs.length) return;
+  const np = await askPassValue('设置账号口令', '「' + name + '」还没有口令：设一个 4 位以上的口令，别人就拿不到这个账号的写入权，换设备/换浏览器登录也用它', true);
+  if(!np || np.length < 4){ toast('没设口令：这个账号的云端档案目前仍可被任何人改写', 3400); return; }
+  writeKey = await acctKeyOfPass(np);
+  acctKeySet(name, writeKey);
+  const m = metaEnsure();
+  m.lock = { on: true, hash: await hashPass(np) };
+  saveLocal();
+  cloudPush(name);
+  toast('已设好账号口令，云端写入已受保护');
 }
 
 async function cloudPull(name, tries, keepTomb){
@@ -3590,6 +3674,12 @@ async function cloudPush(name, data){
     lastCloudSyncAt = at;
     return true;
   }catch(e){
+    if(String((e && e.message) || e).indexOf('BAD_KEY') >= 0){
+      // 口令在别的设备上改过：本机缓存的写入凭据已经失效
+      writeKey = '';
+      acctKeySet(key, '');
+      toast('本机缓存的账号凭据已失效，请重新登录并输入口令', 3200);
+    }
     return false;
   }
 }
@@ -4274,8 +4364,8 @@ function lockOf(name){
     return (lk && lk.on && lk.hash) ? lk : null;
   }catch(e){ return null; }
 }
-async function hashPass(pw){
-  const src = 'sww-lock:' + pw;
+async function hashPass(pw, salt){
+  const src = (salt || 'sww-lock:') + pw;
   try{
     const buf = new TextEncoder().encode(src);
     const dig = await crypto.subtle.digest('SHA-256', buf);
@@ -4317,7 +4407,7 @@ function closeLock(v){
 
 /* ---------- 设备安全码：木泽账号换设备登录需输入安全密码 ---------- */
 const GUARD_NAME = '木泽';
-const GUARD_DEFAULT = '9521';
+/* 不再内置默认安全码：没设过就引导本人现场设一个 */
 function guardOf(data){
   const g = data && data.meta && data.meta.devGuard;
   return (g && g.on) ? g : null;
@@ -4330,10 +4420,13 @@ async function ensureDevGuard(){
   if(currentUser !== GUARD_NAME) return;
   const m = metaEnsure();
   if(!m.devGuard || !m.devGuard.hash){
-    m.devGuard = { on:true, hash: await hashPass(GUARD_DEFAULT) };
+    const code = await askPassValue('设置设备安全码', '给「木泽」设一个 6 位以上的设备安全码：换设备登录时要用它，源码里不再留任何默认码', true);
+    if(!code || code.length < 6){ toast('还没设设备安全码，换设备登录暂时没有额外保护', 3200); return; }
+    m.devGuard = { on:true, hash: await hashPass(code) };
     saveLocal();
     cloudPush(currentUser);
     refreshGuardRow();
+    toast('设备安全码已设好');
   }
 }
 function refreshGuardRow(){
@@ -4718,6 +4811,7 @@ async function doLogin(){
 
   let cloudData = null, cloudAt = 0, legacy = false, guardPassed = false, cloudOffline = false;
   let passedHash = '';
+  let knownPass = '';
   try{
     // 0) 本机档案先拿到手：有本机档案的用户不必等云端就能进门
     const localData = readProfile(raw);
@@ -4735,6 +4829,7 @@ async function doLogin(){
       if(await hashPass(pw) !== lockNow.hash){ toast('密码不对，无法进入', 2600); return; }
       passedHash = lockNow.hash;
       setLockOkCache(raw, lockNow.hash);
+      knownPass = pw;
     }
 
     // 3) 等云端：本机已有档案时最多等 5 秒，新设备最多等 8 秒，超时也不许无限干等
@@ -4796,6 +4891,7 @@ async function doLogin(){
         if(await hashPass(pw2) !== cloudHash){ toast('密码不对，无法进入', 2600); return; }
         passedHash = cloudHash;
         setLockOkCache(raw, cloudHash);
+        knownPass = pw2;
       }
     }
 
@@ -4808,19 +4904,21 @@ async function doLogin(){
         || (localData && localData.meta && localData.meta.devGuard) || null;
       const guardOn = gRec ? !!gRec.on : true;   // 没有记录时默认开启
       const devLocal = deviceIsLocalOf(cloudData) || deviceIsLocalOf(localData) || devOkOf(raw);
-      if(guardOn && !devLocal){
+      if(guardOn && !devLocal && gRec && gRec.hash){
         const code = await askPassValue('设备安全码', '这台设备不是「木泽」的本地设备，输入安全密码才能登录', false);
         if(!code){ toast('已取消登录'); return; }
-        const ok = (gRec && gRec.hash) ? (await hashPass(code)) === gRec.hash : (code === GUARD_DEFAULT);
-        if(!ok){ toast('安全密码不对，这台设备不能登录', 2600); return; }
+        if((await hashPass(code)) !== gRec.hash){ toast('安全密码不对，这台设备不能登录', 2600); return; }
         guardPassed = true;
         setDevOk(raw);
       }
     }
 
     // 7) 进门：有本机档案或云端档案都会有内容；进度由后台对齐补齐
+    writeKey = knownPass ? await acctKeyOfPass(knownPass) : (acctKeyGet(raw) || '');
+    if(knownPass) acctKeySet(raw, writeKey);
     enterAccount(raw, cloudData);
     if(guardPassed) markThisDeviceLocal();
+    if(!writeKey) await ensureAccountPassphrase(raw, cloudData || localData);
 
     if(cloudData){
       cloudPush(raw);
@@ -6582,6 +6680,8 @@ let adminFilter = '';
 let adminLoadedAt = 0;
 
 function isAdmin(){ return currentUser === ADMIN_NAME; }
+/* 破坏性操作：光叫「木泽」不算数，必须这次会话里通过了云端口令校验 */
+function adminArmed(){ return isAdmin() && adminPassOk && adminPassOwner === currentUser; }
 function refreshAdminRow(){
   const row = $('#adminRow');
   if(row) row.style.display = isAdmin() ? '' : 'none';
@@ -6621,7 +6721,7 @@ function adminNoteOf(name){
 const adminNoteModal = $('#adminNoteModal');
 let adminNoteTarget = '';
 function openAdminNote(name){
-  if(!isAdmin()){ toast('只有安全员能写备注'); return; }
+  if(!adminArmed()){ toast('请先通过安全员口令校验'); return; }
   adminNoteTarget = name;
   $('#adminNoteTitle').textContent = '备注 · ' + name;
   $('#adminNoteInput').value = adminNoteOf(name);
@@ -6819,7 +6919,7 @@ function adminRender(){
 }
 
 async function adminDeleteUser(name){
-  if(!isAdmin()){ toast('只有安全员能删除用户'); return false; }
+  if(!adminArmed()){ toast('请先通过安全员口令校验'); return false; }
   if(name === currentUser){ toast('不能删除当前登录的账号'); return false; }
   try{
     const cloud = await cloudPull(name);
@@ -6909,7 +7009,7 @@ function adminRenderTrash(){
 }
 
 async function adminRestoreUser(name, payload){
-  if(!isAdmin()){ toast('只有安全员能恢复用户'); return false; }
+  if(!adminArmed()){ toast('请先通过安全员口令校验'); return false; }
   const data = parseCloudPayload(payload);
   if(!data){ toast('快照读不出来，无法恢复'); return false; }
   try{
@@ -6937,7 +7037,7 @@ async function adminRestoreUser(name, payload){
 const adminModal = $('#adminModal');
 /* 安全员口令：只存哈希在云端，进面板前必须校验 */
 const PASS_ROW = '#口令#';
-const PASS_DEFAULT = '9521';
+/* 源码里不再留任何默认口令：云端没有口令记录时，必须由本人现场设一个强口令 */
 let adminPassOk = false;
 let adminPassOwner = '';
 let adminPassWaiter = null;
@@ -6998,9 +7098,15 @@ async function submitAdminPass(){
   try{
     const rec = await passPull();
     const h = await hashPass(pw), alt = fnvPass(pw);
-    const ok = rec ? ((h && h === rec.hash) || alt === rec.alt) : (pw === PASS_DEFAULT);
-    if(!ok){ btn.disabled = false; msg.textContent = '口令不对，再试一次'; return; }
-    if(!rec){ try{ await passPush(pw); }catch(e){} }
+    if(!rec){
+      if(pw.length < 8){ btn.disabled = false; msg.textContent = '首次设置安全员口令：至少 8 位，别用生日或连号'; return; }
+      sysKeySet(await acctKeyOfPass(pw), sysKey);
+      try{ await passPush(pw); }catch(e){ btn.disabled = false; msg.textContent = '云端写入失败，稍后再试'; return; }
+    }else{
+      const ok = (h && h === rec.hash) || alt === rec.alt;
+      if(!ok){ btn.disabled = false; msg.textContent = '口令不对，再试一次'; return; }
+      sysKeySet(await acctKeyOfPass(pw), sysKey);
+    }
     adminPassOk = true;
     adminPassPlain = pw;   // 只在内存里留着，用于调用云端删除函数
     adminPassOwner = currentUser;
@@ -7039,6 +7145,23 @@ if($('#closeAdmin')) $('#closeAdmin').addEventListener('click', closeAdmin);
 if(adminModal) adminModal.addEventListener('click', e => { if(e.target === adminModal) closeAdmin(); });
 if($('#adminRefresh')) $('#adminRefresh').addEventListener('click', () => adminLoad(true));
 
+/* 轮换安全员口令：云端哈希、系统行写入凭据一起换，旧口令立即失效 */
+async function changeAdminPass(){
+  if(!adminArmed()){ toast('请先通过安全员口令校验'); return; }
+  const np = await askPassValue('改安全员口令', '设一个新的安全员口令（至少 8 位）。改完后广播、讲解、删除用户都用新口令，旧口令立刻失效', true);
+  if(!np || np.length < 8){ toast('至少 8 位，未修改'); return; }
+  try{
+    const oldKey = sysKey;
+    sysKeySet(await acctKeyOfPass(np), oldKey);
+    await passPush(np);
+    adminPassPlain = np;
+    toast('安全员口令已更新，请记牢：' + np, 6000);
+  }catch(e){
+    toast('云端写入失败，口令未改：' + ((e && e.message) || ''), 3200);
+  }
+}
+if($('#adminChangePass')) $('#adminChangePass').addEventListener('click', changeAdminPass);
+
 function updateAdminHistBtn(){
   const btn = $('#adminCleanHist');
   if(!btn) return;
@@ -7048,7 +7171,7 @@ function updateAdminHistBtn(){
 }
 let adminCleanArmed = 0;
 async function adminCleanHistory(){
-  if(!isAdmin()){ toast('只有安全员能清理'); return; }
+  if(!adminArmed()){ toast('请先通过安全员口令校验'); return; }
   const btn = $('#adminCleanHist');
   if(!adminHistRows.length){ toast('没有历史行需要清理'); return; }
   if(!adminCleanArmed){
@@ -7078,7 +7201,7 @@ if($('#adminCleanHist')) $('#adminCleanHist').addEventListener('click', adminCle
 /* 清理注销行：把带「已注销」标记的行彻底删掉（需要云端已授予删除权限） */
 let adminPurgeArmed = 0;
 async function adminPurgeTomb(){
-  if(!isAdmin()){ toast('只有安全员能清理'); return; }
+  if(!adminArmed()){ toast('请先通过安全员口令校验'); return; }
   const list = tombList();
   if(!list.length){ toast('没有注销行需要清理'); return; }
   const btn = $('#adminPurgeTomb');
@@ -11041,7 +11164,9 @@ $('#lockSwitch').addEventListener('click', async () => {
     const pw = await askPassValue('开启知识锁', '给「' + currentUser + '」设一个登录密码，之后每次登录都要输入', true);
     if(!pw) return;
     m.lock = { on:true, hash: await hashPass(pw) };
-    toast('知识锁已开启');
+    writeKey = await acctKeyOfPass(pw);
+    acctKeySet(currentUser, writeKey);
+    toast('知识锁已开启，云端写入已绑定这个口令');
   }else{
     const pw = await askPassValue('关闭知识锁', '输入当前密码后关闭，关闭后登录不再需要密码', false);
     if(!pw) return;
@@ -11060,7 +11185,9 @@ if($('#guardSwitch')) $('#guardSwitch').addEventListener('click', async () => {
   if(currentUser !== GUARD_NAME){ toast('只有「木泽」能管理设备安全码'); return; }
   const m = metaEnsure();
   if(!m.devGuard || !m.devGuard.on){
-    m.devGuard = { on:true, hash: await hashPass(GUARD_DEFAULT) };
+    const code = await askPassValue('开启设备安全码', '设一个 6 位以上的安全码，其他设备登录「木泽」时要输入它', true);
+    if(!code || code.length < 6){ toast('至少 6 位，未开启'); return; }
+    m.devGuard = { on:true, hash: await hashPass(code) };
     toast('设备安全码已开启：其他设备登录要输入安全密码');
   }else{
     const code = await askPassValue('关闭设备安全码', '输入当前安全密码后关闭，关闭后任何设备都能直接登录', false);
