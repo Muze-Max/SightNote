@@ -1702,6 +1702,13 @@
         </div>
         <button class="btn-line" id="openGuide" style="padding:7px 15px;font-size:11px;">查看 ›</button>
       </div>
+      <div class="setting-row" id="deskRow">
+        <div>
+          桌面图标
+          <div class="desc">在设备桌面放一个入口，双击就直达「记忆」，不用每次登录</div>
+        </div>
+        <button class="btn-line" id="makeDesktopIcon" style="padding:7px 15px;font-size:11px;">生成 ›</button>
+      </div>
       <div class="setting-row" id="adminRow" style="display:none;">
         <div>
           安全员
@@ -8003,6 +8010,31 @@ function closeGuide(){
   hideLater(guideModal);
 }
 if($('#openGuide')) $('#openGuide').addEventListener('click', () => openGuide());
+
+/* ---------- 桌面图标：给任意用户生成一个「双击直达记忆」的桌面入口 ---------- */
+function isMobileUA(){
+  return /Android|iPhone|iPad|iPod|HarmonyOS|Mobile/i.test(navigator.userAgent);
+}
+function makeDesktopIcon(){
+  if(isMobileUA()){
+    toast('手机端请用浏览器菜单里的「添加到主屏幕」，加上后点图标也是直达记忆', 4200);
+    return;
+  }
+  // 同一个域名 + 同一个 #home：登录状态沿用这个域名的本机存储，不会再问密码
+  const base = location.origin + location.pathname;
+  const target = base + '#home';
+  const text = '[InternetShortcut]\r\nURL=' + target + '\r\n' + 'IDList=\r\n';
+  const blob = new Blob([text], { type: 'application/internet-shortcut' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '视网速记.url';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1200);
+  toast('已下载「视网速记.url」：把它拖到桌面，双击就直达记忆页；第一次打开输一次名字和口令，之后不用再输', 5200);
+}
+if($('#makeDesktopIcon')) $('#makeDesktopIcon').addEventListener('click', makeDesktopIcon);
 if($('#closeGuide')) $('#closeGuide').addEventListener('click', closeGuide);
 if(guideModal) guideModal.addEventListener('click', e => { if(e.target === guideModal) closeGuide(); });
 
