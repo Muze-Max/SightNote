@@ -1717,6 +1717,13 @@
         </div>
         <button class="btn-line" id="makeDesktopIcon" style="padding:7px 15px;font-size:11px;">生成 ›</button>
       </div>
+      <div class="setting-row" id="bakRow">
+        <div>
+          导出备份
+          <div class="desc">把当前全部内容存成一个文件，云端出事时可用它恢复</div>
+        </div>
+        <button class="btn-line" id="exportBak" style="padding:7px 15px;font-size:11px;">导出 ›</button>
+      </div>
       <div class="setting-row" id="adminRow" style="display:none;">
         <div>
           安全员
@@ -3808,6 +3815,10 @@ async function cloudPush(name, data){
       setSyncLine('云端拒绝写入：内容骤减，已保留原档');
       return false;
     }
+    if(String((e && e.message) || e).indexOf('STALE_WRITE') >= 0){
+      setSyncLine('这台设备的时钟或版本落后，本次没有覆盖云端');
+      return false;
+    }
     if(String((e && e.message) || e).indexOf('BAD_KEY') >= 0){
       // 本机没有凭据（刷新后没重新登录），或口令在别的设备改过：把凭据找回来再重试
       writeKey = '';
@@ -4028,7 +4039,7 @@ async function cloudHistory(name, limit){
   const base = histBase(name);
   try{
     const txt = await cloudReq('GET', '/rest/v1/shiwang_profiles?username=like.' +
-      encodeURIComponent(base + HIST_MARK + '*') + '&select=username,payload,updated_at&order=updated_at.desc&limit=' + (limit || HIST_MAX),
+      encodeURIComponent(base + '#' + '*') + '&select=username,payload,updated_at&order=updated_at.desc&limit=' + (limit || HIST_MAX),
       null, null, 2);
     const rows = JSON.parse(txt || '[]');
     const out = [];
@@ -8190,6 +8201,24 @@ function makeDesktopIcon(){
   toast('已下载「视网速记.url」：把它拖到桌面，双击就直达记忆页；第一次打开输一次名字和口令，之后不用再输', 5200);
 }
 if($('#makeDesktopIcon')) $('#makeDesktopIcon').addEventListener('click', makeDesktopIcon);
+/* 导出备份：把当前档案存成文件，云端出问题时可作为最后一道保险 */
+if($('#exportBak')) $('#exportBak').addEventListener('click', () => {
+  try{
+    const snap = ttSnapshot();
+    const txt = JSON.stringify({ v:1, name:currentUser, at:Date.now(), data:snap }, null, 1);
+    const d = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const stamp = d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes());
+    const blob = new Blob([txt], { type:'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = '视网速记-备份-' + (currentUser || '账号') + '-' + stamp + '.json';
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1200);
+    const c = contentCount(snap);
+    toast('已导出备份：' + c.items + ' 条词 + ' + c.words + ' 个生熟词', 3200);
+  }catch(e){ toast('导出失败：' + ((e && e.message) || e), 3000); }
+});
 if($('#closeAddHome')) $('#closeAddHome').addEventListener('click', closeAddHome);
 if($('#okAddHome')) $('#okAddHome').addEventListener('click', closeAddHome);
 if($('#copyAddHome')) $('#copyAddHome').addEventListener('click', () => {
