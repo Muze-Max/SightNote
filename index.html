@@ -6522,7 +6522,8 @@ async function adminUsersRefresh(force){
   const adm = adminNameSafe();
   const tomb = tombList();
   const list = rows.map(r => r && r.username)
-    .filter(n => n && n.charAt(0) !== '#' && n !== adm && tomb.indexOf(n) < 0)
+    .filter(n => n && n.charAt(0) !== '#' && n !== adm && tomb.indexOf(n) < 0
+      && n.indexOf('#H') < 0 && n.indexOf('#D') < 0)   // 排除历史快照槽位 / 注销墓碑行
     .sort((a, b) => String(a).localeCompare(String(b), 'zh-Hans-CN'));
   adminUserCache = { at: Date.now(), list };
   return list;
