@@ -6458,12 +6458,16 @@ async function renderEarth(){
   if(!box) return;
   if(!isAdmin()){ box.style.display = 'none'; return; }
   box.style.display = '';
-  const list = await regLoad(true) || [];
+  const list = await regLoad(true);
   const note = $('#earthNote');
-  if(note) note.textContent = list.length ? ('已准许 ' + list.length + ' 个') : '准许注册的用户名';
+  if(note) note.textContent = (list && list.length) ? ('已准许 ' + list.length + ' 个') : '准许注册的用户名';
   const b = $('#earthList');
   if(!b) return;
   b.innerHTML = '';
+  if(list === null){
+    b.innerHTML = '<div class="transit-empty">云端暂时读不到名单，稍后重试</div>';
+    return;
+  }
   if(!list.length){
     b.innerHTML = '<div class="transit-empty">还没有准许任何人——新用户现在进不来</div>';
     return;
