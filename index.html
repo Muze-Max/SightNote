@@ -3775,7 +3775,7 @@ async function ensureAccountPassphrase(name, data){
   writeKey = await acctKeyOfPass(np);
   acctKeySet(name, writeKey);
   const m = metaEnsure();
-  m.lock = { on: true, hash: await hashPass(np), at: Date.now() };
+  m.lock = { on: true, hash: await hashPass(np), at: Date.now(), armed: true };
   saveLocal();
   cloudPush(name);
   toast('已设好账号口令，云端写入已受保护');
@@ -4708,7 +4708,9 @@ function lockOf(name){
   try{
     const d = readProfile(normName(name) || name);
     const lk = d && d.meta && d.meta.lock;
-    return (lk && lk.on && lk.hash) ? lk : null;
+    // 只有「过了管理员口令之后开启」的锁才算数（armed）。旧版留下的锁没有这个标记，
+    // 一律忽略，避免旧设备把一份没人认领的锁又推回来把人挡在登录页。
+    return (lk && lk.on && lk.hash && lk.armed === true) ? lk : null;
   }catch(e){ return null; }
 }
 /* 纯 JS SHA-256：不依赖 crypto.subtle。
@@ -5334,13 +5336,13 @@ async function doLogin(){
       const e0 = await waitAtMost(pullP, 4200);
       if(e0 && !e0.__timeout && e0.data){ cloudData = e0.data; cloudAt = e0.at || 0; }
       const cl0 = cloudData && cloudData.meta ? (cloudData.meta.lock || null) : null;
-      if(cl0) lockNow = (cl0.on && cl0.hash) ? cl0 : null;
+      if(cl0) lockNow = (cl0.on && cl0.hash && cl0.armed === true) ? cl0 : null;
     }
     if(lockNow && lockNow.on && lockNow.hash){
       const early = await waitAtMost(pullP, 1200);
       const cd = (early && !early.__timeout) ? early.data : null;
       const cl = cd && cd.meta ? cd.meta.lock : null;
-      if(cl) lockNow = cl;              // 云端有明确设置就以云端为准
+      if(cl) lockNow = (cl.on && cl.hash && cl.armed === true) ? cl : null;   // 云端有明确设置就以云端为准
     }
     if(lockNow && lockNow.on && lockNow.hash){
       const pw = await askPassValue('知识锁', '「' + raw + '」已开启知识锁，请输入密码后进入', false);
@@ -5360,7 +5362,7 @@ async function doLogin(){
       // ① 知识锁：以云端这一版为准（云端没开就不问）
       const lk = (cloudData && cloudData.meta && cloudData.meta.lock)
         || (localData && localData.meta && localData.meta.lock) || null;
-      if(lk && lk.on && lk.hash && lk.hash !== passedHash){
+      if(lk && lk.on && lk.hash && lk.armed === true && lk.hash !== passedHash){
         const pw1 = await askPassValue('第 1 道 · 知识锁', '「木泽」的登录密码', false);
         if(!pw1){ toast('已取消登录'); return; }
         if(await hashPass(pw1) !== lk.hash){ toast('第 1 道密码不对，无法进入', 2600); return; }
@@ -5488,9 +5490,10 @@ async function doLogin(){
     }
 
     // 4) 云端说的锁和本机记住的不一样（改过密码）→ 按云端再验一次
-    const cloudHash = (cloudData && cloudData.meta && cloudData.meta.lock && cloudData.meta.lock.on)
-      ? (cloudData.meta.lock.hash || '') : '';
-    if(cloudData && cloudData.meta && cloudData.meta.lock && cloudData.meta.lock.on){
+    const cloudLockArmed = !!(cloudData && cloudData.meta && cloudData.meta.lock
+      && cloudData.meta.lock.on && cloudData.meta.lock.hash && cloudData.meta.lock.armed === true);
+    const cloudHash = cloudLockArmed ? (cloudData.meta.lock.hash || '') : '';
+    if(cloudLockArmed){
       if(cloudHash && cloudHash !== passedHash){
         const pw2 = await askPassValue('知识锁', '「' + raw + '」已开启知识锁，请输入密码后进入', false);
         if(!pw2){ toast('已取消登录'); return; }
@@ -5524,7 +5527,8 @@ async function doLogin(){
     if(entryDone){
       if(cloudData){
         // 秒进用的是本机记住的锁，云端若已被改过就必须重验，不能拿旧密码混过去
-        const cloudHash2 = (cloudData.meta && cloudData.meta.lock && cloudData.meta.lock.on) ? (cloudData.meta.lock.hash || '') : '';
+        const clk2 = cloudData.meta && cloudData.meta.lock;
+        const cloudHash2 = (clk2 && clk2.on && clk2.hash && clk2.armed === true) ? (clk2.hash || '') : '';
         if(cloudHash2 && cloudHash2 !== passedHash){
           cloudBlocked = true;
           toast('云端密码在别处改过了，请重新登录验证', 3200);
@@ -12515,7 +12519,7 @@ $('#lockSwitch').addEventListener('click', async () => {
   if(!m.lock.on){
     const pw = await askPassValue('开启知识锁', '给「' + currentUser + '」设一个登录密码，之后每次登录都要输入', true);
     if(!pw) return;
-    m.lock = { on:true, hash: await hashPass(pw), at: Date.now() };
+    m.lock = { on:true, hash: await hashPass(pw), at: Date.now(), armed: true };
     writeKey = await acctKeyOfPass(pw);
     acctKeySet(currentUser, writeKey);
     toast('知识锁已开启，云端写入已绑定这个口令');
