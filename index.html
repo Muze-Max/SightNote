@@ -6386,21 +6386,11 @@ async function renderAdminPane(){
   const s = social();
   // 管理员这栏：普通用户发来的消息（存在 adminChats，和好友聊天不交叉）
   if(isAdmin()){
-    if(line) line.textContent = '用户发来的工作消息 · 也可发飞信';
+    if(line) line.textContent = '用户发来的工作消息';
     const names = Object.keys(s.adminChats || {}).filter(n => (s.adminChats[n] || []).length && n !== BROADCAST_NAME);
     const hint = $('#adminHint');
     box.innerHTML = '';
-    // 飞信固定置顶：一条消息发出去，所有普通用户的管理员栏都会收到
-    const bRow = document.createElement('div');
-    bRow.className = 'friend-row';
-    const bList = s.adminChats[BROADCAST_NAME] || [];
-    const bLast = bList.length ? bList[bList.length - 1] : null;
-    bRow.innerHTML =
-      '<span class="av">信</span>' +
-      '<span class="who"><span class="nm">' + escapeHtml(BROADCAST_NAME) + '</span>' +
-        '<div class="sub">' + escapeHtml(bLast ? (bLast.text || '[消息]').slice(0, 18) : '发给所有普通用户') + '</div></span>';
-    bRow.addEventListener('click', () => openAdminChat(BROADCAST_NAME));
-    box.appendChild(bRow);
+    // 飞信（全站传信）已经下线，这里不再显示那条固定置顶
 
     if(!names.length){
       if(hint) hint.style.display = 'none';
@@ -10170,6 +10160,7 @@ if($('#cloudSaveNow')) $('#cloudSaveNow').addEventListener('click', async () => 
   btn.disabled = false; btn.textContent = '保存当前状态到云端';
   if(ok){
     cloudCntSet(currentUser, ttSnapshot());
+    cloudAtSet(currentUser, new Date().toISOString());
     toast('已保存为云端最新一版');
   }else{
     toast('云端没写上去，检查网络后再点一次');
