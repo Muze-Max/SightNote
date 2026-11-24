@@ -1137,6 +1137,8 @@
     font-family:inherit;font-size:12px;color:var(--soft);cursor:pointer;
   }
   .seg-btn.on{background:#fff;color:var(--ink);box-shadow:0 1px 4px rgba(30,30,24,.09);}
+  .seg.stag{display:inline-flex;flex:0 0 auto;margin:0;padding:3px;gap:3px;background:#f3f3ee;}
+  .seg.stag .seg-btn{flex:0 0 auto;padding:6px 11px;font-size:11px;white-space:nowrap;}
 
   /* 群聊列表 */
   .group-row{
@@ -1559,6 +1561,16 @@
         </div>
         <button class="switch" data-setting="readAloud" aria-label="朗读"></button>
       </div>
+      <div class="setting-row" id="stagRow">
+        <div>
+          错位
+          <div class="desc">点「开始记忆」进学习页时，词条是否重新随机打乱顺序、字号与位置</div>
+        </div>
+        <div class="seg stag" id="stagSeg">
+          <button class="seg-btn on" data-stag="1" type="button">Ⅰ 打乱</button>
+          <button class="seg-btn" data-stag="0" type="button">Ⅱ 不打乱</button>
+        </div>
+      </div>
     </section>
   </div>
 
@@ -1597,20 +1609,6 @@
         <span class="note" id="friendNote">还没有好友</span>
       </div>
       <div id="friendList"></div>
-    </div>
-
-    <div id="paneGroup" class="hidden" style="display:none;">
-      <div class="social-add">
-        <button class="btn-line" id="newGroupBtn" style="padding:9px 16px;font-size:11.5px;width:100%;">＋ 创建群聊</button>
-      </div>
-
-      <div id="groupReqBox"></div>
-
-      <div class="sec-head" style="margin-top:4px;">
-        <h2>群聊</h2>
-        <span class="note" id="groupNote">还没有群聊</span>
-      </div>
-      <div id="groupList"></div>
     </div>
 
     <div id="paneMeet" class="hidden">
@@ -2358,22 +2356,6 @@
       <div class="field-line"><input id="remarkInput" maxlength="12" placeholder="给好友起个备注名（留空则恢复原名）" spellcheck="false"></div>
       <div class="hint-mini" style="margin:10px 2px 0;" id="remarkTip"></div>
       <button class="btn-line" id="saveRemark" style="margin-top:14px;">保存</button>
-    </div>
-  </div>
-</div>
-
-<!-- ============== 创建群聊 ============== -->
-<div class="modal hidden" id="groupModal">
-  <div class="sheet">
-    <div class="sheet-head">
-      <h3>创建群聊</h3>
-      <button class="close-x" id="closeGroupModal" aria-label="关闭">×</button>
-    </div>
-    <div class="sheet-body">
-      <div class="field-line"><input id="groupName" maxlength="16" placeholder="给群聊起个名字（如：期末冲刺组）" spellcheck="false"></div>
-      <p class="format-tip" style="margin-top:12px;">选择要拉进来的好友（至少一位，最多 8 位）</p>
-      <div class="group-pick" id="groupPickList"></div>
-      <button class="primary" id="createGroup" style="margin-top:14px;">创建并邀请</button>
     </div>
   </div>
 </div>
@@ -3327,7 +3309,7 @@ function emptyState(){
   return {
     customSets: [], hiddenSets: [], enabled: {}, unknown: [], known: [], views: {}, wordEdits: {}, annotations: {},
     social: { friends: [], req: [], chats: {}, read: {}, notes: {}, groups: [], greq: [], gchats: {}, gread: {} },
-    settings: { random:true, skipKnown:true, pageEffect:'cubeIn', perPage:32 },
+    settings: { random:true, skipKnown:true, pageEffect:'cubeIn', perPage:32, stagger:true },
     meta: { constellation:'', devices: [], records: [], lock: { on:false, hash:'' }, synapse: '' }
   };
 }
@@ -3344,7 +3326,7 @@ const state = {
   wordEdits: {},
   annotations: {},
   social: { friends: [], req: [], chats: {}, read: {}, notes: {}, groups: [], greq: [], gchats: {}, gread: {} },
-  settings: { random:true, skipKnown:true, pageEffect:'cubeIn', fxVer:1, perPage:32 },
+  settings: { random:true, skipKnown:true, pageEffect:'cubeIn', fxVer:1, perPage:32, stagger:true },
   meta: { constellation:'', devices: [], records: [], synapse: '' }
 };
 
@@ -3485,7 +3467,7 @@ function applySaved(obj){
   state.wordEdits = (obj.wordEdits && typeof obj.wordEdits === 'object') ? obj.wordEdits : {};
   state.annotations = (obj.annotations && typeof obj.annotations === 'object') ? obj.annotations : {};
   state.social = normSocial(obj.social);
-  state.settings = Object.assign({ random:true, skipKnown:true, pageEffect:'cubeIn', fxVer:0, perPage:32 }, obj.settings || {});
+  state.settings = Object.assign({ random:true, skipKnown:true, pageEffect:'cubeIn', fxVer:0, perPage:32, stagger:true }, obj.settings || {});
   // 默认滑动效果：魔方（内）。用户手动选过（fxVer=99）才尊重自选
   if(state.settings.fxVer !== 99) state.settings.pageEffect = 'cubeIn';
   const pp = parseInt(state.settings.perPage, 10);
@@ -6265,7 +6247,6 @@ function renderSocial(){
     });
   }
 
-  renderGroups();
   updateSynapseUI();
 }
 
@@ -6343,18 +6324,16 @@ function renderMeet(){
   if(oN) oN.textContent = outgoing.length ? ('等待中 ' + outPending + ' 条 · 共 ' + outgoing.length + ' 条') : '暂无';
 }
 
-/* ---------- 群聊：列表 / 创建 / 邀请 ---------- */
+/* ---------- 视窗页签切换 ---------- */
 function setSocialTab(tab){
   socialTab = tab;
   $('#socialSeg').querySelectorAll('.seg-btn').forEach(b => {
     b.classList.toggle('on', b.dataset.seg === tab);
   });
-  const f = $('#paneFriend'), g = $('#paneGroup'), m = $('#paneMeet'), a = $('#paneAdmin');
+  const f = $('#paneFriend'), m = $('#paneMeet'), a = $('#paneAdmin');
   if(f) f.classList.toggle('hidden', tab !== 'friend');
-  if(g) g.classList.toggle('hidden', tab !== 'group');
   if(m) m.classList.toggle('hidden', tab !== 'meet');
   if(a) a.classList.toggle('hidden', tab !== 'admin');
-  if(tab === 'group') renderGroups();
   if(tab === 'meet') renderMeet();
   if(tab === 'admin'){
     if(typeof isAdmin === 'function' && isAdmin()){
@@ -6418,130 +6397,6 @@ async function renderAdminPane(){
       '<div class="sub">系统管理员 · 点开直接留言</div></span>';
   row.addEventListener('click', () => openAdminChat('admin'));
   box.appendChild(row);
-}
-
-function renderGroups(){
-  const note = $('#groupNote');
-  if(note) note.textContent = social().groups.length ? '共 ' + social().groups.length + ' 个' : '还没有群聊';
-
-  const rq = $('#groupReqBox');
-  if(rq){
-    rq.innerHTML = '';
-    (social().greq || []).forEach(inv => {
-      const row = document.createElement('div');
-      row.className = 'req-row';
-      const nm = document.createElement('span');
-      nm.className = 'nm';
-      nm.textContent = '「' + (inv.from || '好友') + '」邀请你进群「' + (inv.name || '群聊') + '」';
-      const ok = document.createElement('button');
-      ok.className = 'btn-line'; ok.textContent = '加入';
-      ok.addEventListener('click', () => acceptGroupInvite(inv.id));
-      const no = document.createElement('button');
-      no.className = 'btn-line'; no.textContent = '拒绝';
-      no.addEventListener('click', () => rejectGroupInvite(inv.id));
-      row.appendChild(nm); row.appendChild(ok); row.appendChild(no);
-      rq.appendChild(row);
-    });
-  }
-
-  const list = $('#groupList');
-  if(!list) return;
-  list.innerHTML = '';
-  if(!social().groups.length){
-    list.innerHTML = '<div class="transit-empty">建个群，把好友拉进来一起背单词</div>';
-    return;
-  }
-  social().groups.slice().sort((a,b) => (b.at || 0) - (a.at || 0)).forEach(g => {
-    const msgs = social().gchats[g.id] || [];
-    const last = msgs.length ? msgs[msgs.length - 1] : null;
-    const unread = last && (Number(last.at) || 0) > (Number(social().gread[g.id]) || 0) && last.from !== currentUser;
-    const row = document.createElement('div');
-    row.className = 'group-row';
-    row.innerHTML =
-      '<span class="av">' + escapeHtml((g.name || '群').slice(0, 1)) + '</span>' +
-      '<span class="who"><span class="nm">' + escapeHtml(g.name) + '</span>' +
-        '<div class="sub">' + (last
-          ? escapeHtml((last.voice ? '[语音] ' : last.share ? '[分享] ' : '') + (last.from === currentUser ? '我：' : last.from + '：') + (last.text || '').slice(0, 16))
-          : '还没有消息，打个招呼吧') + '</div></span>' +
-      (unread ? '<span class="dot"></span>' : '') +
-      '<span class="cnt">' + (g.members || []).length + ' 人</span>';
-    row.addEventListener('click', () => openGroupChat(g.id));
-    list.appendChild(row);
-  });
-}
-
-function openGroupModal(){
-  const box = $('#groupPickList');
-  box.innerHTML = '';
-  if(!social().friends.length){
-    box.innerHTML = '<div class="transit-empty">还没有好友，先加上好友再建群</div>';
-    return;
-  }
-  social().friends.forEach(name => {
-    const row = document.createElement('div');
-    row.className = 'gp-row';
-    row.dataset.name = name;
-    const rk = remarkOf(name);
-    row.innerHTML = '<span class="ck"></span><span class="nm">' + escapeHtml(rk || name) + '</span>' +
-      (rk ? '<span class="ori">' + escapeHtml(name) + '</span>' : '');
-    row.addEventListener('click', () => row.classList.toggle('on'));
-    box.appendChild(row);
-  });
-  $('#groupName').value = '';
-  groupModal.classList.remove('hidden');
-  requestAnimationFrame(() => groupModal.classList.add('show'));
-}
-function closeGroupModal(){
-  groupModal.classList.remove('show');
-  hideLater(groupModal);
-}
-
-async function createGroup(){
-  const name = ($('#groupName').value || '').replace(/\s+/g, ' ').trim().slice(0, 16);
-  if(!name){ toast('先给群聊起个名字'); return; }
-  const picked = Array.from(document.querySelectorAll('#groupPickList .gp-row.on')).map(r => r.dataset.name)
-    .filter(n => n && n !== currentUser).slice(0, 8);
-  if(!picked.length){ toast('至少选一位好友'); return; }
-
-  const gid = 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const group = { id: gid, name: name, owner: currentUser, members: [currentUser].concat(picked), at: Date.now() };
-  const s = social();
-  s.groups.push(group);
-  s.gchats[gid] = [];
-  if(!s.gread) s.gread = {};
-  s.gread[gid] = Date.now();
-  save();
-  renderGroups();
-  closeGroupModal();
-  toast('群聊「' + name + '」建好了，正在通知好友…');
-
-  for(const m of picked){
-    try{ await msgSend(m, 'ginv', { group: group }); }catch(e){}
-  }
-  toast('已把「' + name + '」发给 ' + picked.length + ' 位好友，等他们加入');
-}
-
-function acceptGroupInvite(gid){
-  const s = social();
-  const inv = (s.greq || []).find(r => r.id === gid);
-  if(!inv) return;
-  if(!s.groups.some(g => g.id === gid)){
-    s.groups.push({
-      id: gid, name: inv.name || '群聊', owner: inv.from || '',
-      members: Array.isArray(inv.members) ? inv.members.slice() : [currentUser],
-      at: Number(inv.at) || Date.now()
-    });
-  }
-  s.greq = (s.greq || []).filter(r => r.id !== gid);
-  s.gread[gid] = Date.now();
-  save();
-  renderGroups();
-  toast('已加入群聊「' + (inv.name || '群聊') + '」');
-}
-function rejectGroupInvite(gid){
-  social().greq = (social().greq || []).filter(r => r.id !== gid);
-  save();
-  renderGroups();
 }
 
 /* ---------- 交友：云端信号强化（角标 / 轮询 / 失败补发） ---------- */
@@ -6826,24 +6681,6 @@ function openAdminChat(peer){
     fxFillInputs(sc);
     if($('#fxEditTip')) $('#fxEditTip').textContent = '';
   }
-  showView(chatModal);
-  loadChat();
-  clearInterval(chatTimer);
-  chatTimer = setInterval(loadChat, 15000);
-}
-
-function openGroupChat(gid){
-  const g = social().groups.find(x => x.id === gid);
-  if(!g){ toast('这个群不存在了'); return; }
-  chatFriend = '';
-  chatGroupId = gid;
-  chatAdminPeer = '';
-  chatModal.classList.remove('admin-mode');
-  $('#chatTitle').textContent = g.name + ' · ' + (g.members || []).length + ' 人';
-  $('#chatText').value = '';
-  chatView = [];
-  const av = $('#chatAvatar');
-  if(av){ av.classList.add('ghost'); av.textContent = '群'; av.title = '群聊'; }
   showView(chatModal);
   loadChat();
   clearInterval(chatTimer);
@@ -7320,7 +7157,7 @@ function adminRender(){
           '<div><span class="k">知识库</span> ' + sets.length + ' 个 · 合计 ' + totalItems + ' 条</div>' +
           '<div><span class="k">生词 / 熟词</span> ' + (data.unknown || []).length + ' / ' + (data.known || []).length + ' 条</div>' +
           '<div><span class="k">批注</span> ' + anns + ' 条</div>' +
-          '<div><span class="k">好友 / 群聊</span> ' + social.friends.length + ' 位 · ' + social.groups.length + ' 个</div>' +
+          '<div><span class="k">好友</span> ' + social.friends.length + ' 位</div>' +
           '<div><span class="k">突触</span> ' + ((data.meta && data.meta.synapse) || '未生成') + '</div>' +
           '<div><span class="k">设备记录</span> ' + devs + ' 台</div>' +
           (sets.length ? '<div><span class="k">库名</span> ' + sets.slice(0, 8).map(s => escapeHtml(s.name)).join('、') + '</div>' : '');
@@ -8222,7 +8059,6 @@ if($('#closeGuide')) $('#closeGuide').addEventListener('click', closeGuide);
 if(guideModal) guideModal.addEventListener('click', e => { if(e.target === guideModal) closeGuide(); });
 
 async function loadChat(){
-  if(chatGroupId){ await loadGroupChat(); return; }
   if(chatAdminPeer){ await loadAdminChat(); return; }
   if(!chatFriend) return;
   const local = (social().chats[chatFriend] || []).slice();
@@ -8313,43 +8149,10 @@ async function loadAdminChat(){
   saveLocal();
 }
 
-/* 群聊：把每个成员档案里的这个群消息拉下来合并 */
-async function loadGroupChat(){
-  const g = social().groups.find(x => x.id === chatGroupId);
-  if(!g) return;
-  const local = (social().gchats[chatGroupId] || []).slice();
-  const seen = new Set();
-  const all = [];
-  local.forEach(m => { const k = msgKey(m); if(!seen.has(k)){ seen.add(k); all.push(m); } });
-
-  const others = (g.members || []).filter(n => n && n !== currentUser).slice(0, 8);
-  for(const name of others){
-    try{
-      const row = await cloudPull(name);
-      const d = row ? parseCloudPayload(row.payload) : null;
-      if(!d || !d.social) continue;
-      const s = normSocial(d.social);
-      const list = s.gchats[chatGroupId];
-      if(!Array.isArray(list)) continue;
-      list.forEach(m => { const k = msgKey(m); if(!seen.has(k)){ seen.add(k); all.push(m); } });
-    }catch(e){}
-  }
-  all.sort((a, b) => (a.at || 0) - (b.at || 0));
-  chatView = all;
-  renderChat();
-  social().gread[chatGroupId] = Date.now();
-  saveLocal();
-}
-
 function voiceBubble(m){
   const wrap = document.createElement('div');
   wrap.className = 'msg voice' + (m.from === currentUser ? ' me' : '');
-  if(chatGroupId && m.from !== currentUser){
-    const tag = document.createElement('span');
-    tag.className = 'who-tag';
-    tag.textContent = displayName(m.from);
-    wrap.appendChild(tag);
-  }
+
   const vb = document.createElement('div');
   vb.className = 'vb';
   vb.innerHTML = '<span class="vb-ico">▮▮</span><span class="vb-dur">语音 ' + fmtDur(m.voice && m.voice.dur) + ' · 点播放</span>';
@@ -8619,7 +8422,7 @@ function renderChat(){
   if(!box) return;
   box.innerHTML = '';
   if(!chatView.length){
-    box.innerHTML = '<div class="chat-empty">' + (chatGroupId ? '群里还没有消息，发第一条吧。' : '还没有消息。可以发句问候，或直接分享知识库和记忆库。') + '</div>';
+    box.innerHTML = '<div class="chat-empty">' + '还没有消息。可以发句问候，或直接分享知识库和记忆库。' + '</div>';
     return;
   }
   chatView.forEach(m => {
@@ -8639,12 +8442,7 @@ function renderChat(){
         btn.addEventListener('click', () => takeShare(m, btn));
         el.appendChild(btn);
       }else{
-        if(chatGroupId && m.from !== currentUser){
-          const tag = document.createElement('span');
-          tag.className = 'who-tag';
-          tag.textContent = displayName(m.from);
-          el.appendChild(tag);
-        }
+
         el.appendChild(document.createTextNode(m.text || ''));
       }
       const t = document.createElement('span');
@@ -8672,18 +8470,7 @@ function renderChat(){
 }
 
 function pushChat(m){
-  if(chatGroupId){
-    const list = (social().gchats[chatGroupId] = social().gchats[chatGroupId] || []);
-    list.push(m);
-    chatView.push(m);
-    save();
-    renderChat();
-    // 群消息按成员逐个投递，每人收一份自己的副本
-    const g = (social().groups || []).find(x => x.id === chatGroupId);
-    const members = (g && g.members) ? g.members.filter(n => n && n !== currentUser) : [];
-    members.forEach(n => msgSend(n, 'group', { gid: chatGroupId, msg: m }));
-    return;
-  }
+
   if(chatAdminPeer){
     const myKey = isAdmin() ? chatAdminPeer : 'admin';
     if(chatAdminPeer === BROADCAST_NAME && isAdmin()) fxApplyScopeTo(m);   // 带上接收范围与时效
@@ -8762,25 +8549,7 @@ async function msgPull(){
       }else if(sr){ applied++; needSocial = true; }
       return;
     }
-    if(kind === 'ginv'){
-      const g = b.group;
-      if(!g || !g.id) return;
-      if(!(s.groups || []).some(x => x.id === g.id)) s.groups.push(g);
-      if(!(s.greq || []).some(x => x.id === g.id)) s.greq.push({ id: g.id, name: g.name || '群聊', from: from, members: (g.members || []).slice(), at: at });
-      applied++; needSocial = true;
-      return;
-    }
-    if(kind === 'group'){
-      const gid = b.gid;
-      if(!gid) return;
-      const msg = Object.assign({}, b.msg || {}, { from: from, mid: mid });
-      const list = (s.gchats[gid] = s.gchats[gid] || []);
-      if(!list.some(x => (x.mid && x.mid === mid) || msgKey(x) === msgKey(msg))){
-        list.push(msg); applied++;
-        if(chatGroupId === gid){ chatView.push(msg); needChat = true; }
-      }
-      return;
-    }
+
     if(kind === 'admin'){
       const key = isAdmin() ? from : 'admin';
       const msg = Object.assign({}, b, { from: from, mid: mid });
@@ -9119,7 +8888,7 @@ function sendShare(share){
     text: '[' + (share.kind === 'set' ? '知识库' : '记忆库') + '] ' + share.name,
     share: share
   });
-  toast(chatGroupId ? '已分享到群里' : (chatAdminPeer ? '已发给管理员' : '已分享给「' + displayName(chatFriend) + '」'));
+  toast(chatAdminPeer ? '已发给管理员' : '已分享给「' + displayName(chatFriend) + '」');
 }
 
 if($('#friendAdd')) $('#friendAdd').addEventListener('click', addFriend);
@@ -9172,7 +8941,6 @@ if($('#closeSharePick')) $('#closeSharePick').addEventListener('click', closeSha
 if(sharePickModal) sharePickModal.addEventListener('click', e => { if(e.target === sharePickModal) closeSharePick(); });
 
 /* ---------- 语音消息：边说边转文字 ---------- */
-const groupModal = $('#groupModal');
 const SRClass = window.SpeechRecognition || window.webkitSpeechRecognition || null;
 let voiceRec = null;
 let voiceActive = false;
@@ -9257,15 +9025,11 @@ function startVoice(){
 if($('#voiceBtn')) $('#voiceBtn').addEventListener('click', startVoice);
 if($('#voiceStop')) $('#voiceStop').addEventListener('click', stopVoice);
 
-/* ---------- 群聊入口 ---------- */
+/* ---------- 视窗页签 ---------- */
 if($('#socialSeg')) $('#socialSeg').addEventListener('click', e => {
   const b = e.target.closest('.seg-btn');
   if(b) setSocialTab(b.dataset.seg);
 });
-if($('#newGroupBtn')) $('#newGroupBtn').addEventListener('click', openGroupModal);
-if($('#closeGroupModal')) $('#closeGroupModal').addEventListener('click', closeGroupModal);
-if($('#createGroup')) $('#createGroup').addEventListener('click', createGroup);
-if(groupModal) groupModal.addEventListener('click', e => { if(e.target === groupModal) closeGroupModal(); });
 
 /* ================== 菜单渲染 ================== */
 function setTree(){
@@ -9345,6 +9109,7 @@ function renderMenu(){
   refreshGuardRow();
   if(currentUser) ensureSynapse();
   const fxName = EFFECT_LABELS[state.settings.pageEffect] || '魔方（内）';
+  markStag();
   $('#effectLabel').textContent = fxName;
   $('#unknownCount').textContent = state.unknown.length;
   $('#knownCount').textContent = state.known.length;
@@ -9424,6 +9189,14 @@ $$('.switch').forEach(sw => {
     save(); renderMenu();
     if(key === 'readAloud') toast(state.settings.readAloud ? '朗读已开启：点单词就会读出来' : '朗读已关闭');
   });
+});
+if($('#stagSeg')) $('#stagSeg').addEventListener('click', e => {
+  const b = e.target.closest('.seg-btn');
+  if(!b) return;
+  state.settings.stagger = b.dataset.stag === '1';
+  save();
+  markStag();
+  toast(state.settings.stagger ? '错位已开：每次进入都会重新打乱' : '错位已关：顺序与位置固定');
 });
 
 $$('.book').forEach(b => {
@@ -10409,7 +10182,20 @@ function buildDeck(){
   if(pageIndex >= deck.length) pageIndex = Math.max(0, deck.length - 1);
 }
 
+/* 错位：开 = 每次渲染重新随机打乱；关 = 顺序、字号、位置都固定 */
+function stagOn(){ return state.settings ? (state.settings.stagger !== false) : true; }
+function markStag(){
+  const box = $('#stagSeg');
+  if(!box) return;
+  box.querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('on', b.dataset.stag === (stagOn() ? '1' : '0')));
+}
+
 function fontSizeFor(it){
+  if(!stagOn()){
+    if(it.type === 'sentence') return 14;
+    if(it.type === 'phrase')   return 16;
+    return 19;
+  }
   if(it.type === 'sentence') return 13 + Math.round(Math.random()*3);   // 13–16
   if(it.type === 'phrase')   return 15 + Math.round(Math.random()*4);   // 15–18
   return 17 + Math.round(Math.random()*6);                              // 17–22
@@ -10476,7 +10262,7 @@ function computeExtras(base){
 function pageItems(i){
   if(pageCache.has(i)) return pageCache.get(i);
   const base = deck[i].slice();
-  const list = base.concat(computeExtras(base));
+  const list = base.concat(stagOn() ? computeExtras(base) : []);
   pageCache.set(i, list);
   return list;
 }
@@ -10498,7 +10284,7 @@ function layout(items){
   const wrapW = Math.min(small ? availW : 560, availW);
   const maxPerRow = small ? 3 : 6;
 
-  let list = shuffle(items).map(it => {
+  let list = (stagOn() ? shuffle(items) : items).map(it => {
     const fs = fontSizeFor(it);
     const size = measureItem(it, wrapW, fs);
     return { it, fs, w:size.w, h:size.h, extra: !!it._extra };
@@ -10550,13 +10336,13 @@ function layout(items){
     const gapX = Math.min(small ? 30 : 68, free / Math.max(1, n + 1));
     const rowW = sumW + gapX * (n - 1);
     const baseX = padX + Math.max(0, (availW - rowW) / 2);
-    // 每行整体再做一次随机横移，保证每次回来位置都不一样
-    const shift = (Math.random() - 0.5) * Math.min(28, Math.max(0, availW - rowW));
+    // 每行整体再做一次随机横移；关掉错位时行、词的位置都固定
+    const shift = stagOn() ? (Math.random() - 0.5) * Math.min(28, Math.max(0, availW - rowW)) : 0;
     let x = baseX + shift;
 
     row.items.forEach(m => {
-      const jx = (Math.random() - 0.5) * Math.min(10, gapX * 0.3);
-      const jy = (Math.random() - 0.5) * Math.min(12, Math.max(0, row.h - m.h));
+      const jx = stagOn() ? (Math.random() - 0.5) * Math.min(10, gapX * 0.3) : 0;
+      const jy = stagOn() ? (Math.random() - 0.5) * Math.min(12, Math.max(0, row.h - m.h)) : 0;
       m.x = Math.max(padX, Math.min(x + jx, padX + availW - m.w));
       m.y = y + (row.h - m.h) / 2 + jy;
       x += m.w + gapX;
@@ -10591,7 +10377,7 @@ function renderPage(){
       el.style.fontSize = m.fs + 'px';
       el.style.left = m.x.toFixed(1) + 'px';
       el.style.top = m.y.toFixed(1) + 'px';
-      el.style.setProperty('--d', (Math.random()*0.16).toFixed(2) + 's');
+      el.style.setProperty('--d', stagOn() ? (Math.random()*0.16).toFixed(2) + 's' : '0s');
       el.dataset.key = keyOf(m.it);
       el.dataset.say = m.it.en;
       el.dataset.sayAuto = '1';
