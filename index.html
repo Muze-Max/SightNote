@@ -1432,7 +1432,7 @@
   }
   .annot.float.hidden{display:none !important;}
   .annot.float .cdot{width:14px;height:14px;flex:0 0 14px;}
-  .annot.float .annot-bar{padding:6px 9px;gap:5px;}
+  .annot.float .annot-bar{padding:6px 9px;gap:5px;flex-wrap:wrap;overflow-x:visible;}
   .annot.float .abtn{padding:3px 7px;font-size:10px;}
   .annot.float .annot-body{border-radius:0;}
   .annot.float .annot-resize{z-index:2;}
@@ -2258,6 +2258,7 @@
     <div class="annot-undo" style="margin-left:auto;">
       <button type="button" class="abtn" id="afUndo" title="撤销">↶</button>
       <button type="button" class="abtn" id="afRedo" title="重做">↷</button>
+      <button type="button" class="abtn" id="afPenOnly" title="电容笔模式：只认触控笔（或鼠标），手指不写">笔</button>
     </div>
     <button class="close-x" id="afClose" aria-label="收起手写窗">×</button>
   </div>
@@ -10622,6 +10623,8 @@ let annotColor = '#23231f';
 let annotSize = 16;
 let annotPenSize = 16;       // 手写浮窗的笔粗细
 let annotEraseSize = 24;     // 橡皮半径（屏幕 px）
+let annotPenOnly = false;    // 手写浮窗的「电容笔」模式：只认笔/鼠标，手指不落笔
+let annotPenOnlyTiped = false;
 let annotLock = false;       // 打字窗口锁定后不能改内容
 let annotErase = false;
 let annotTab = 'type';
@@ -10803,6 +10806,8 @@ function annotSyncUI(){
     annotFloatEl.querySelectorAll('.af-esz').forEach(b => b.classList.toggle('on', +b.dataset.esz === annotEraseSize));
     const fsz = $('#afSizeNow');
     if(fsz) fsz.textContent = String(annotPenSize);
+    const bpo = $('#afPenOnly');
+    if(bpo) bpo.classList.toggle('on', !!annotPenOnly);
   }
   annotUpdateUndoBtns();
   $('#sizeNow').textContent = String(annotSize);
@@ -10962,6 +10967,13 @@ annotFloatEl.querySelectorAll('.af-esz').forEach(b => {
     annotEraseSize = +b.dataset.esz;
     annotSyncUI(); annotSave(true);
   });
+});
+/* 电容笔模式：只认触控笔/鼠标，手指不落笔 */
+$('#afPenOnly').addEventListener('click', () => {
+  annotPenOnly = !annotPenOnly;
+  annotPenOnlyTiped = false;
+  annotSyncUI();
+  toast(annotPenOnly ? '电容笔模式已开：只有触控笔（或鼠标）能写，手指不落笔' : '电容笔模式已关：手指和触控笔都能写');
 });
 
 /* 手写浮窗：拖动右下角调大小 */
@@ -11142,6 +11154,11 @@ function annotBindDraw(el, gate){
   el.addEventListener('pointerdown', (e) => {
     if(gate && !gate()) return;
     e.preventDefault();
+    // 电容笔模式（只作用于手写浮窗）：手指触摸不落笔，只有笔（pen）或鼠标能写
+    if(el === annotFloatCanvas && annotPenOnly && (e.pointerType === 'touch')){
+      if(!annotPenOnlyTiped){ annotPenOnlyTiped = true; toast('电容笔模式：手指不写，用触控笔（或鼠标）'); }
+      return;
+    }
     const p = annotPtOn(el, e);
     if(annotErase){ annotEraseAt(p, el); return; }
     annotLastSurface = 'draw';
