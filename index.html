@@ -1573,7 +1573,7 @@
   <div class="list-wrap">
     <div class="list-head">
       <h2>视窗</h2>
-      <span class="cnt">和好友一起记词、群聊</span>
+      <span class="cnt">和好友一起记词、互发知识库</span>
     </div>
 
     <div class="synapse-card">
@@ -1587,7 +1587,6 @@
 
     <div class="seg" id="socialSeg">
       <button class="seg-btn on" data-seg="friend" type="button">好友</button>
-      <button class="seg-btn" data-seg="group" type="button">群聊</button>
       <button class="seg-btn" data-seg="meet" type="button">交友<span class="seg-dot" id="meetDot">0</span></button>
       <button class="seg-btn" data-seg="admin" type="button">管理员<span class="seg-dot" id="adminDot">新</span></button>
     </div>
@@ -1600,7 +1599,7 @@
       <div id="friendList"></div>
     </div>
 
-    <div id="paneGroup" class="hidden">
+    <div id="paneGroup" class="hidden" style="display:none;">
       <div class="social-add">
         <button class="btn-line" id="newGroupBtn" style="padding:9px 16px;font-size:11.5px;width:100%;">＋ 创建群聊</button>
       </div>
@@ -1711,16 +1710,6 @@
           <div class="desc">开启后，登录这个用户名要先输入密码</div>
         </div>
         <button class="switch" id="lockSwitch" aria-label="知识锁"></button>
-      </div>
-      <div class="setting-row" id="guardRow" style="display:none;">
-        <div>
-          设备安全码
-          <div class="desc" id="guardDesc">其他设备登录「木泽」要输入安全密码，本机设备直接进入</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <button class="btn-line" id="guardEdit" style="padding:7px 12px;font-size:11px;">改密码</button>
-          <button class="switch" id="guardSwitch" aria-label="设备安全码"></button>
-        </div>
       </div>
       <div class="setting-row" id="deskRow">
         <div>
@@ -4766,7 +4755,8 @@ function closeLock(v){
   if(r) r(v === undefined ? null : v);
 }
 
-/* ---------- 设备安全码：木泽账号换设备登录需输入安全密码 ---------- */
+/* ---------- 设备安全码：已按用户要求下线（不再校验、不再显示设置项） ---------- */
+var DEV_GUARD_ON = false;
 const GUARD_NAME = '木泽';
 /* 已设过的安全码指纹：云端合并偶尔会把这份记录挤掉，留一份兜底，
    免得又弹「设置设备安全码」。只在本地/云端都查不到时使用 */
@@ -4785,6 +4775,7 @@ function deviceIsLocalOf(data){
 }
 /* 本机缺安全码时只做「取回」，绝不再弹设置框；要改/设码请走 我的 → 设置 */
 async function ensureDevGuard(){
+  if(!DEV_GUARD_ON) return;
   if(currentUser !== GUARD_NAME) return;
   const m = metaEnsure();
   if(m.devGuard && (m.devGuard.hash || !m.devGuard.on)) return;
@@ -5373,8 +5364,8 @@ async function doLogin(){
     // 5) 学习进度与知识库取“更高/更全”的并集，而不是简单覆盖
     if(cloudData && localData) cloudData = mergeData(cloudData, localData, { baseAt: cloudAt || 0, extraAt: localAt || 0 });
 
-    // 6) 设备安全码：木泽账号在非本地设备登录需输入安全密码
-    if(raw === GUARD_NAME){
+    // 6) 设备安全码：已下线，不再校验
+    if(DEV_GUARD_ON && raw === GUARD_NAME){
       const gRec = (cloudData && cloudData.meta && cloudData.meta.devGuard)
         || (localData && localData.meta && localData.meta.devGuard) || null;
       const guardOn = gRec ? !!gRec.on : true;   // 没有记录时默认开启
@@ -5400,7 +5391,7 @@ async function doLogin(){
           openLogin();
           return;
         }
-        if(raw === GUARD_NAME){
+        if(DEV_GUARD_ON && raw === GUARD_NAME){
           const gRec2 = (cloudData.meta && cloudData.meta.devGuard) || (localData.meta && localData.meta.devGuard) || null;
           const devLocal2 = deviceIsLocalOf(cloudData) || deviceIsLocalOf(localData) || devOkOf(raw);
           const gHash2 = (gRec2 && gRec2.hash) || GUARD_FALLBACK[GUARD_NAME] || '';
