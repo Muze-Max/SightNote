@@ -5255,11 +5255,11 @@ async function doLogin(){
       btn.textContent = oldLabel;
       btn.disabled = false;
     }
-    let pulled = await waitAtMost(pullP, entryDone ? 6000 : 8000);
+    let pulled = await waitAtMost(pullP, entryDone ? 1500 : 5000);
     if(!pulled || pulled.__timeout) pulled = null;
     if(!pulled && !localData){
-      toast('云端响应较慢，正在重试…', 2200);
-      pulled = await waitAtMost(pullP, 9000);
+      toast('云端响应较慢，正在重试…', 2000);
+      pulled = await waitAtMost(pullP, 6000);
       if(pulled && pulled.__timeout) pulled = null;
       if(!pulled){
         cloudOffline = true;
@@ -5365,6 +5365,8 @@ async function doLogin(){
       cloudBlocked = false;
       if(guardPassed) markThisDeviceLocal();
       cloudPush(raw);
+      startSocialPoll();
+      msgPull().catch(() => {});
       if(cloudData) toast('已与云端对齐，' + raw + ' 欢迎回来', 2400);
       loginPrefetch.clear();
       return;
@@ -5374,6 +5376,7 @@ async function doLogin(){
     if(ak1 || knownPass) acctKeySet(raw, writeKey);
     enterAccount(raw, cloudData);
     if(guardPassed) markThisDeviceLocal();
+    setTimeout(() => { startSocialPoll(); msgPull().catch(() => {}); }, 600);
     if(!writeKey) await ensureAccountPassphrase(raw, cloudData || localData);
 
     if(cloudData){
@@ -6196,6 +6199,7 @@ function openSocial(){
   updateSocialBadge();
   setMeetSync('正在同步交友申请…');
   refreshSocialFromCloud(true);
+  msgPull().catch(() => {});
   sqFlush();
   startSocialPoll();
 }
@@ -6498,16 +6502,7 @@ async function createGroup(){
   toast('群聊「' + name + '」建好了，正在通知好友…');
 
   for(const m of picked){
-    try{
-      const row = await cloudPull(m);
-      const d = row ? parseCloudPayload(row.payload) : readProfile(m);
-      if(!d) continue;
-      d.social = normSocial(d.social);
-      if(!d.social.greq.some(r => r.id === gid)){
-        d.social.greq.push({ id: gid, name: name, from: currentUser, members: group.members.slice(), at: Date.now() });
-      }
-      await cloudPush(m, d);
-    }catch(e){}
+    try{ await msgSend(m, 'ginv', { group: group }); }catch(e){}
   }
   toast('已把「' + name + '」发给 ' + picked.length + ' 位好友，等他们加入');
 }
@@ -6562,7 +6557,12 @@ function setMeetSync(txt, warn){
 }
 function startSocialPoll(){
   if(socialPollTimer) return;
-  socialPollTimer = setInterval(() => { if(!document.hidden) refreshSocialFromCloud(true); }, 12000);
+  socialPollTimer = setInterval(() => {
+    if(document.hidden) return;
+    refreshSocialFromCloud(true);
+    msgPull().catch(() => {});        // 消息表：好友/管理员/群的新消息都从这里收
+    if(chatFriend || chatGroupId || chatAdminPeer) loadChat();
+  }, 10000);
 }
 function stopSocialPoll(){
   if(socialPollTimer){ clearInterval(socialPollTimer); socialPollTimer = null; }
@@ -6693,31 +6693,16 @@ async function addFriend(){
     toast('你们已经是好友了');
     return;
   }
-  let data = null;
-  try{
-    const row = await cloudPull(name);
-    data = row ? parseCloudPayload(row.payload) : null;
-  }catch(e){}
-  if(!data) data = readProfile(name);
-  if(!data){
-    $('#friendAdd').disabled = false;
-    toast('对方账号还没同步到云端，稍后再试');
-    return;
-  }
-  data.social = normSocial(data.social);
-  if(!data.social.req.some(r => r.from === currentUser)){
-    data.social.req.push({ from: currentUser, at: Date.now() });
-  }
-  const ok = await cloudPush(name, data);
+  // 申请走消息表投递给对方，不再去改对方的档案
+  const ok = await msgSend(name, 'req', { at: Date.now() });
   $('#friendAdd').disabled = false;
   if(!ok){
-    // 先记进本机，等网络恢复自动补发，不让申请白白丢掉
-    sqAdd({ kind: 'req', name: name, from: currentUser });
+    // 已经进了发送队列，回来会自动补投；这里只把自己这边的记录先落好
     const meq = social();
     if(!meq.sreq.some(r => r.to === name)) meq.sreq.push({ to: name, at: Date.now(), status: 'sending' });
     save();
     renderSocial();
-    toast('网络不稳，申请已排入补发队列');
+    toast('网络不稳，申请稍后自动补发');
     return;
   }
   // 自己这边也留一条「发出的申请」，交友页可见
@@ -6749,21 +6734,9 @@ async function acceptFriend(from){
   save();
   renderSocial();
   toast('已添加「' + from + '」为好友');
-  // 顺手在对方档案里也记上我，并把对方「发出的申请」标成已完成
-  try{
-    const row = await cloudPull(from);
-    const d = row ? parseCloudPayload(row.payload) : readProfile(from);
-    if(d){
-      d.social = normSocial(d.social);
-      if(!d.social.friends.includes(currentUser)) d.social.friends.push(currentUser);
-      const sr = (d.social.sreq || []).find(x => x.to === currentUser);
-      if(sr) sr.status = 'accepted';
-      const ok = await cloudPush(from, d);
-      if(!ok){ sqAdd({ kind: 'accept', name: from }); toast('已加为好友，对方云端稍后自动补同步'); }
-    }else{
-      sqAdd({ kind: 'accept', name: from });
-    }
-  }catch(e){ sqAdd({ kind: 'accept', name: from }); }
+  // 通过的结果走消息表告诉对方：他的「发出申请」会变成已接受，好友里出现我
+  const okTell = await msgSend(from, 'accept', { at: Date.now() });
+  if(!okTell) toast('已加为好友，通知对方稍后自动补发');
   // 自己那份云端档案也更新：申请消失、好友写进去、发出的申请标成已接受
   const okMine = await pushMySocial();
   if(!okMine) sqAdd({ kind: 'accept', name: from });
@@ -6785,16 +6758,9 @@ function rejectFriend(from){
       if(!okMine) sqAdd({ kind: 'reject', name: from });
     }catch(e){ sqAdd({ kind: 'reject', name: from }); }
   })();
-  // 通知对方：把对方那份「发出的申请」标成已拒绝，不再一直挂着
+  // 通知对方：他的「发出申请」标成已拒绝，不再一直挂着
   (async function(){
-    try{
-      const row = await cloudPull(from);
-      const d = row ? parseCloudPayload(row.payload) : null;
-      if(!d){ sqAdd({ kind: 'reject', name: from }); return; }
-      d.social = normSocial(d.social);
-      const sr = (d.social.sreq || []).find(x => x.to === currentUser);
-      if(sr){ sr.status = 'rejected'; const ok = await cloudPush(from, d); if(!ok) sqAdd({ kind: 'reject', name: from }); }
-    }catch(e){ sqAdd({ kind: 'reject', name: from }); }
+    try{ await msgSend(from, 'reject', { at: Date.now() }); }catch(e){}
   })();
 }
 
@@ -8703,6 +8669,10 @@ function pushChat(m){
     chatView.push(m);
     save();
     renderChat();
+    // 群消息按成员逐个投递，每人收一份自己的副本
+    const g = (social().groups || []).find(x => x.id === chatGroupId);
+    const members = (g && g.members) ? g.members.filter(n => n && n !== currentUser) : [];
+    members.forEach(n => msgSend(n, 'group', { gid: chatGroupId, msg: m }));
     return;
   }
   if(chatAdminPeer){
@@ -8713,7 +8683,7 @@ function pushChat(m){
     save();
     renderChat();
     if(chatAdminPeer === BROADCAST_NAME && isAdmin()) broadcastToUsers(m);
-    else if(chatAdminPeer !== BROADCAST_NAME) deliverAdminMsg(m);
+    else msgSend(isAdmin() ? chatAdminPeer : ADMIN_NAME, 'admin', m);
     return;
   }
   if(!chatFriend) return;
@@ -8721,10 +8691,127 @@ function pushChat(m){
   chatView.push(m);
   save();
   renderChat();
+  msgSend(chatFriend, 'dm', m);
 }
 
-/* 管理员通道投递：普通用户→管理员档案[key=用户名]；管理员→对方档案[key='admin']。
-   和好友 chats 无关，所以给管理员发消息不会出现在好友「木泽」的会话里。 */
+/* ---------- 独立消息表：跨用户消息一律经服务端投递 ----------
+   以前是把消息写进「对方的档案」，权限加固后这条路被拒（BAD_KEY），
+   于是好友 / 管理员 / 群消息全都只是「本地看着发出去了」，对方收不到。
+   现在消息单独一张表：谁发的、发给谁、什么类型分得清清楚楚，
+   双方档案里只留自己的副本。 */
+let msgOutbox = [];
+const MSG_AT_KEY = 'sww-msg-at@';
+function msgAckName(n){ return normName(n) || n; }
+function msgAcctKey(n){
+  try{ return autoAcctKey(n) || ((n === currentUser) ? (writeKey || '') : '') || acctKeyGet(n) || ''; }catch(e){ return ''; }
+}
+async function msgSend(to, kind, body){
+  if(!to || !currentUser || to === currentUser) return false;
+  try{
+    await cloudReq('POST', '/rest/v1/rpc/sww_msg_send',
+      JSON.stringify({ p_from: currentUser, p_key: msgAcctKey(currentUser), p_to: to, p_kind: kind, p_body: body || {} }), null, 1);
+    return true;
+  }catch(e){
+    msgOutbox.push({ to: to, kind: kind, body: body || {} });
+    if(msgOutbox.length > 60) msgOutbox = msgOutbox.slice(-60);
+    return false;
+  }
+}
+/* 拉取收件箱并并进本机：申请、同意、拒绝、群消息、私聊、管理员消息统一在这里落地 */
+async function msgPull(){
+  if(!currentUser || cloudBlocked) return 0;
+  const who = msgAckName(currentUser);
+  const since = Number(localStorage.getItem(MSG_AT_KEY + who) || 0) || 0;
+  let rows = [];
+  try{
+    const txt = await cloudReq('POST', '/rest/v1/rpc/sww_msg_pull',
+      JSON.stringify({ p_user: currentUser, p_key: msgAcctKey(currentUser),
+        p_since: since ? new Date(since).toISOString() : null, p_limit: 200 }), null, 1);
+    rows = JSON.parse(txt || '[]');
+  }catch(e){ return 0; }
+
+  const s = social();
+  let applied = 0, maxAt = since;
+  let needSocial = false, needChat = false;
+  rows.forEach(r => {
+    const at = Date.parse(r.at) || Date.now();
+    if(at > maxAt) maxAt = at;
+    if(at < since) return;
+    const from = r.from_user, kind = r.kind, b = r.body || {};
+    const mid = 'm' + r.id;
+    if(kind === 'req'){
+      if(!s.req.some(x => x.from === from)){ s.req.push({ from: from, at: Number(b.at) || at }); applied++; needSocial = true; }
+      return;
+    }
+    if(kind === 'accept' || kind === 'reject'){
+      const sr = (s.sreq || []).find(x => x.to === from);
+      if(sr) sr.status = kind === 'accept' ? 'accepted' : 'rejected';
+      if(kind === 'accept' && !s.friends.includes(from)){
+        s.friends.push(from);
+        if(!s.rlog.some(x => x.from === from)) s.rlog.push({ from: from, at: at, status:'accepted' });
+        applied++; needSocial = true;
+      }else if(sr){ applied++; needSocial = true; }
+      return;
+    }
+    if(kind === 'ginv'){
+      const g = b.group;
+      if(!g || !g.id) return;
+      if(!(s.groups || []).some(x => x.id === g.id)) s.groups.push(g);
+      if(!(s.greq || []).some(x => x.id === g.id)) s.greq.push({ id: g.id, name: g.name || '群聊', from: from, members: (g.members || []).slice(), at: at });
+      applied++; needSocial = true;
+      return;
+    }
+    if(kind === 'group'){
+      const gid = b.gid;
+      if(!gid) return;
+      const msg = Object.assign({}, b.msg || {}, { from: from, mid: mid });
+      const list = (s.gchats[gid] = s.gchats[gid] || []);
+      if(!list.some(x => (x.mid && x.mid === mid) || msgKey(x) === msgKey(msg))){
+        list.push(msg); applied++;
+        if(chatGroupId === gid){ chatView.push(msg); needChat = true; }
+      }
+      return;
+    }
+    if(kind === 'admin'){
+      const key = isAdmin() ? from : 'admin';
+      const msg = Object.assign({}, b, { from: from, mid: mid });
+      const al = (s.adminChats[key] = s.adminChats[key] || []);
+      if(!al.some(x => (x.mid && x.mid === mid) || msgKey(x) === msgKey(msg))){
+        al.push(msg); applied++;
+        if(chatAdminPeer === key){ chatView.push(msg); needChat = true; }
+      }
+      return;
+    }
+    // dm：普通私聊（也可能带着分享的知识库 / 记忆库）
+    const msg = Object.assign({}, b, { from: from, mid: mid });
+    const list = (s.chats[from] = s.chats[from] || []);
+    if(!list.some(x => (x.mid && x.mid === mid) || msgKey(x) === msgKey(msg))){
+      list.push(msg); applied++;
+      if(chatFriend === from && !chatGroupId && !chatAdminPeer){ chatView.push(msg); needChat = true; }
+    }
+  });
+
+  if(maxAt > since){ try{ localStorage.setItem(MSG_AT_KEY + who, String(maxAt)); }catch(e){} }
+  if(applied){
+    try{ saveLocal(); }catch(e){}
+    if(needSocial){ renderSocial(); updateSocialBadge(); }
+    if(needChat){ renderChat(); }
+    else if(!chatFriend && !chatGroupId && !chatAdminPeer){ updateSocialBadge(); }
+  }
+  // 发不出去的（当时断网）顺手补发一次
+  if(msgOutbox.length){
+    const keep = [];
+    for(const op of msgOutbox.slice()){
+      const ok = await msgSend(op.to, op.kind, op.body);
+      if(!ok) keep.push(op);
+    }
+    msgOutbox = keep;
+  }
+  return applied;
+}
+
+
+/* 管理员通道投递（旧路径，保留作兜底）：普通用户→管理员档案；管理员→对方档案。 */
 async function deliverAdminMsg(m){
   try{
     const target = isAdmin() ? chatAdminPeer : ADMIN_NAME;
