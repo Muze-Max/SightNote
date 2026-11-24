@@ -1402,21 +1402,34 @@
   }
   .annot.hidden{display:none !important;}
   .annot-head{
-    display:flex;align-items:center;gap:8px;
+    display:flex;align-items:center;gap:6px;
     padding:9px 10px 9px 13px;
     border-bottom:1px solid var(--line);
     cursor:move;touch-action:none;
   }
   .annot-word{
     font-size:11.5px;color:var(--soft);letter-spacing:.04em;
-    max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    max-width:76px;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   }
-  .annot-tabs{display:flex;gap:4px;margin-left:auto;}
+  .annot-tabs{display:flex;gap:4px;margin-left:auto;flex:0 0 auto;}
   .annot-tab{
     border:1px solid var(--line);background:#fff;color:var(--soft);
     font-size:10.5px;padding:4px 9px;border-radius:8px;cursor:pointer;
+    white-space:nowrap;flex:0 0 auto;
   }
   .annot-tab.on{background:var(--accent-soft);border-color:#cfe4d6;color:var(--accent);}
+  .annot-undo{display:flex;gap:4px;margin-left:6px;flex:0 0 auto;}
+  .annot-undo .abtn{padding:3px 8px;font-size:12px;line-height:1.1;}
+  .annot-lock{padding:4px 8px;font-size:12px;line-height:1.1;flex:0 0 auto;}
+  .annot-lock.on{background:#fdecec;border-color:#f0bcbc;color:#b03a2e;}
+  .annot-text.locked{background:#fbfbf6;cursor:not-allowed;}
+  .annot.float{
+    position:fixed;z-index:78;width:300px;height:210px;
+    display:flex;flex-direction:column;background:#fff;
+    border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 18px 40px -16px rgba(30,30,24,.34);overflow:hidden;
+  }
+  .annot.float.hidden{display:none !important;}
   .annot .close-x{
     position:static;width:22px;height:22px;line-height:20px;
     border:0;background:transparent;color:var(--faint);font-size:16px;cursor:pointer;
@@ -2197,10 +2210,15 @@
 <div class="annot hidden" id="annotPanel" role="dialog" aria-label="批注">
   <div class="annot-head" id="annotDrag">
     <span class="annot-word" id="annotWord">批注</span>
+    <div class="annot-undo">
+      <button type="button" class="abtn" id="annotUndo" title="撤销">↶</button>
+      <button type="button" class="abtn" id="annotRedo" title="重做">↷</button>
+    </div>
     <div class="annot-tabs">
       <button type="button" class="annot-tab on" data-atab="type">打字</button>
-      <button type="button" class="annot-tab" data-atab="draw">手写</button>
+      <button type="button" class="annot-tab" data-atab="draw" title="长按可以把「手写」拖出来，单独一窗">手写</button>
     </div>
+    <button type="button" class="abtn annot-lock" id="annotLock" title="锁定打字内容">锁</button>
     <button class="close-x" id="closeAnnot" aria-label="关闭">×</button>
   </div>
   <div class="annot-bar">
@@ -2225,6 +2243,21 @@
     <canvas id="annotCanvas" class="hidden"></canvas>
   </div>
   <div class="annot-resize" id="annotResize" title="拖动调整大小"></div>
+</div>
+
+<!-- 手写浮窗：长按「手写」拖出来，和打字窗同时存在 -->
+<div class="annot float hidden" id="annotDrawFloat">
+  <div class="annot-head" id="annotFloatDrag">
+    <span class="annot-word">手写</span>
+    <div class="annot-undo" style="margin-left:auto;">
+      <button type="button" class="abtn" id="afUndo" title="撤销">↶</button>
+      <button type="button" class="abtn" id="afRedo" title="重做">↷</button>
+      <button type="button" class="abtn" id="afEraser" title="橡皮擦">橡皮</button>
+      <button type="button" class="abtn" id="afClear" title="清空手写">清空</button>
+    </div>
+    <button class="close-x" id="afClose" aria-label="收起手写窗">×</button>
+  </div>
+  <div class="annot-body"><canvas id="annotFloatCanvas"></canvas></div>
 </div>
 
 <!-- ============== 知识库：视途（跨用户迁移） ============== -->
@@ -10566,6 +10599,7 @@ let annotOn = false;         // 批注模式开关
 let annotKey = '';           // 当前单词的 key
 let annotColor = '#23231f';
 let annotSize = 16;
+let annotLock = false;       // 打字窗口锁定后不能改内容
 let annotErase = false;
 let annotTab = 'type';
 let annotStrokes = [];       // [{c, w, pts:[{x,y}]}] x,y 归一化
@@ -10578,32 +10612,40 @@ const annotDrag = $('#annotDrag');
 const annotResize = $('#annotResize');
 const annotTextEl = $('#annotText');
 const annotCanvasEl = $('#annotCanvas');
+const annotFloatEl = $('#annotDrawFloat');
+const annotFloatCanvas = $('#annotFloatCanvas');
+const annotFloatCtx = (annotFloatCanvas && annotFloatCanvas.getContext) ? annotFloatCanvas.getContext('2d') : null;
 const annotCtx = annotCanvasEl.getContext ? annotCanvasEl.getContext('2d') : null;
 
-function annotHas(k){ return !!(k && state.annotations && state.annotations[k]); }
-function annotRec(k){ return (state.annotations && state.annotations[k]) || null; }
-
-/* —— 画布：尺寸与重绘 —— */
-function annotSetupCanvas(){
-  const w = annotCanvasEl.clientWidth || 300;
-  const h = annotCanvasEl.clientHeight || 150;
+/* —— 画布：主窗与手写浮窗共用一套笔迹 —— */
+function annotCtxOf(el){ return el === annotFloatCanvas ? annotFloatCtx : annotCtx; }
+function annotFloatOpen(){ return !!(annotFloatEl && !annotFloatEl.classList.contains('hidden')); }
+function annotSetupCanvasOne(el){
+  const ctx = annotCtxOf(el);
+  if(!ctx) return;
+  const w = el.clientWidth || 300;
+  const h = el.clientHeight || 150;
   const r = Math.min(2, window.devicePixelRatio || 1);
-  annotCanvasEl.width = Math.round(w * r);
-  annotCanvasEl.height = Math.round(h * r);
+  el.width = Math.round(w * r);
+  el.height = Math.round(h * r);
   annotDrawAll();
 }
-function annotLW(w){
-  const ratio = annotCanvasEl.width / (annotCanvasEl.clientWidth || annotCanvasEl.width || 1);
+function annotSetupCanvas(){
+  annotSetupCanvasOne(annotCanvasEl);
+  if(annotFloatOpen()) annotSetupCanvasOne(annotFloatCanvas);
+}
+function annotLW(el, w){
+  const ratio = el.width / (el.clientWidth || el.width || 1);
   return Math.max(1, w * ratio);
 }
-function annotStroke(s){
-  if(!annotCtx) return;
-  const W = annotCanvasEl.width, H = annotCanvasEl.height;
+function annotStrokeOn(el, s){
+  const ctx = annotCtxOf(el);
+  if(!ctx) return;
+  const W = el.width, H = el.height;
   const pts = s.pts || [];
   if(!pts.length) return;
-  const ctx = annotCtx;
   ctx.strokeStyle = s.c || '#23231f';
-  ctx.lineWidth = annotLW(s.w || 2);
+  ctx.lineWidth = annotLW(el, s.w || 2);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.beginPath();
@@ -10620,13 +10662,22 @@ function annotStroke(s){
   }
   ctx.stroke();
 }
+function annotDrawOne(el){
+  const ctx = annotCtxOf(el);
+  if(!ctx) return;
+  ctx.clearRect(0,0, el.width, el.height);
+  annotStrokes.forEach(s => annotStrokeOn(el, s));
+  if(annotCur) annotStrokeOn(el, annotCur);
+}
 function annotDrawAll(){
-  if(!annotCtx) return;
-  annotCtx.clearRect(0,0, annotCanvasEl.width, annotCanvasEl.height);
-  annotStrokes.forEach(annotStroke);
-  if(annotCur) annotStroke(annotCur);
+  annotDrawOne(annotCanvasEl);
+  if(annotFloatOpen()) annotDrawOne(annotFloatCanvas);
 }
 
+function annotHas(k){ return !!(k && state.annotations && state.annotations[k]); }
+function annotRec(k){ return (state.annotations && state.annotations[k]) || null; }
+
+/* —— 画布：尺寸与重绘 —— */
 /* —— 富文本：只允许颜色与底色，其它标签一律拆掉 —— */
 function annotSanitize(html){
   const box = document.createElement('div');
@@ -10664,6 +10715,7 @@ function annotEsc(s){
 }
 /* 选中文字后改颜色 / 底色；没有选中就当作「接下来打的字用什么颜色」 */
 function annotApplyToSelection(kind, value){
+  if(annotLock) return false;
   const sel = window.getSelection ? window.getSelection() : null;
   if(!sel || !sel.rangeCount || sel.isCollapsed) return false;
   const r = sel.getRangeAt(0);
@@ -10694,6 +10746,7 @@ function annotSave(skipRender){
     html: html,
     size: annotSize,
     color: annotColor,
+    lock: !!annotLock,
     strokes: annotStrokes.map(s => ({
       c: s.c, w: s.w, pts: s.pts.map(p => ({ x: +p.x.toFixed(4), y: +p.y.toFixed(4) }))
     })),
@@ -10714,6 +10767,13 @@ function annotSyncUI(){
   });
   annotTextEl.classList.toggle('hidden', annotTab !== 'type');
   annotCanvasEl.classList.toggle('hidden', annotTab !== 'draw');
+  annotTextEl.classList.toggle('locked', !!annotLock);
+  annotTextEl.contentEditable = annotLock ? 'false' : 'true';
+  const lockBtn = $('#annotLock');
+  if(lockBtn){ lockBtn.classList.toggle('on', !!annotLock); lockBtn.textContent = annotLock ? '已锁' : '锁'; }
+  const af = $('#afEraser');
+  if(af){ af.classList.toggle('on', annotErase); af.textContent = annotErase ? '橡皮(开)' : '橡皮'; }
+  annotUpdateUndoBtns();
   $('#sizeNow').textContent = String(annotSize);
   annotTextEl.style.fontSize = annotSize + 'px';
   annotTextEl.style.color = annotColor;
@@ -10738,6 +10798,9 @@ function openAnnot(item, el){
   annotSize = rec && rec.size ? Math.min(32, Math.max(12, rec.size)) : 16;
   annotColor = rec && rec.color ? rec.color : '#23231f';
   annotErase = false;
+  annotLock = !!(rec && rec.lock);
+  annotHistReset();
+  if(annotFloatEl){ annotFloatEl.classList.add('hidden'); delete annotFloatEl.dataset.pos; }
   const w = item.en || '';
   $('#annotWord').textContent = w.length > 18 ? w.slice(0,18) + '…' : w;
 
@@ -10760,6 +10823,7 @@ function openAnnot(item, el){
 function closeAnnot(){
   if(annotPanel.classList.contains('hidden')) return;
   annotPanel.classList.add('hidden');
+  if(annotFloatEl){ annotFloatEl.classList.add('hidden'); delete annotFloatEl.dataset.pos; }
   annotSave(false);
   clearActive();
   annotKey = '';
@@ -10787,13 +10851,57 @@ $('#penBtn').addEventListener('click', () => {
 });
 $('#closeAnnot').addEventListener('click', closeAnnot);
 
-/* tab 切换 */
+/* tab 切换；长按「手写」可以把它拖成单独一窗 */
+let annotLpTimer = null, annotLpFired = false;
 $('.annot-tabs').querySelectorAll('.annot-tab').forEach(t => {
+  t.addEventListener('pointerdown', (e) => {
+    if(t.dataset.atab !== 'draw' || !annotFloatEl) return;
+    clearTimeout(annotLpTimer);
+    annotLpFired = false;
+    annotLpTimer = setTimeout(() => {
+      annotLpFired = true;
+      if(annotFloatOpen()) annotFloatCloseWin();
+      else { annotFloatOpenWin(); annotTab = 'type'; annotSyncUI(); }
+    }, 480);
+  });
+  ['pointerup','pointerleave','pointercancel'].forEach(ev => t.addEventListener(ev, () => {
+    clearTimeout(annotLpTimer);
+    annotLpTimer = null;
+  }));
   t.addEventListener('click', () => {
+    if(annotLpFired){ annotLpFired = false; return; }
     annotTab = t.dataset.atab;
+    if(annotTab === 'type') annotLastSurface = 'type';
     annotSyncUI();
     if(annotTab === 'draw') requestAnimationFrame(annotSetupCanvas);
   });
+});
+
+/* 撤销 / 重做 */
+$('#annotUndo').addEventListener('click', () => annotUndoAct(false));
+$('#annotRedo').addEventListener('click', () => annotUndoAct(true));
+$('#afUndo').addEventListener('click', () => { annotLastSurface = 'draw'; annotUndoAct(false); });
+$('#afRedo').addEventListener('click', () => { annotLastSurface = 'draw'; annotUndoAct(true); });
+
+/* 打字锁 */
+$('#annotLock').addEventListener('click', () => {
+  annotLock = !annotLock;
+  annotSyncUI();
+  annotSave(true);
+  toast(annotLock ? '打字窗口已锁，内容不能再改' : '打字窗口已解锁');
+});
+
+/* 手写浮窗按钮 */
+$('#afClose').addEventListener('click', () => { annotFloatCloseWin(); toast('手写窗已收起'); });
+$('#afEraser').addEventListener('click', () => { annotErase = !annotErase; annotSyncUI(); });
+$('#afClear').addEventListener('click', () => {
+  annotStrokes = [];
+  annotCur = null;
+  annotHistPush();
+  annotDrawAll();
+  annotSyncUI();
+  annotSave(true);
+  toast('已清空手写');
 });
 
 /* 颜色：先看有没有选中文字，选中就改那段，没选就改默认字色 */
@@ -10839,6 +10947,7 @@ $('#clearAnnot').addEventListener('click', () => {
   if(annotTab === 'draw'){
     annotStrokes = [];
     annotCur = null;
+    annotHistPush();
     annotDrawAll();
     annotSyncUI();
     annotSave(true);
@@ -10852,7 +10961,8 @@ $('#clearAnnot').addEventListener('click', () => {
 });
 
 /* 文本输入 */
-annotTextEl.addEventListener('input', annotQueueSave);
+annotTextEl.addEventListener('input', () => { annotLastSurface = 'type'; annotQueueSave(); });
+annotTextEl.addEventListener('focus', () => { annotLastSurface = 'type'; });
 annotTextEl.addEventListener('blur', () => annotSave(true));
 /* 粘贴只取纯文字，别把外部的字体和排版一起带进来 */
 annotTextEl.addEventListener('paste', (e) => {
@@ -10864,8 +10974,8 @@ annotTextEl.addEventListener('paste', (e) => {
 });
 
 /* —— 手写（兼容 Apple Pencil / 鼠标 / 手指） —— */
-function annotPt(e){
-  const rect = annotCanvasEl.getBoundingClientRect();
+function annotPtOn(el, e){
+  const rect = el.getBoundingClientRect();
   return {
     x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
     y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height))
@@ -10879,8 +10989,8 @@ function annotPenWidth(e){
   }
   return base;
 }
-function annotEraseAt(p){
-  const r = 14 / Math.max(1, annotCanvasEl.clientWidth);
+function annotEraseAt(p, el){
+  const r = 14 / Math.max(1, (el || annotCanvasEl).clientWidth);
   let hit = -1;
   for(let i=annotStrokes.length-1;i>=0;i--){
     const pts = annotStrokes[i].pts || [];
@@ -10891,44 +11001,156 @@ function annotEraseAt(p){
   }
   if(hit >= 0){
     annotStrokes.splice(hit, 1);
+    annotHistPush();
     annotDrawAll();
     annotSave(true);
   }
 }
-annotCanvasEl.addEventListener('pointerdown', (e) => {
-  e.preventDefault();
-  if(annotTab !== 'draw') return;
-  const p = annotPt(e);
-  if(annotErase){ annotEraseAt(p); return; }
-  try{ annotCanvasEl.setPointerCapture(e.pointerId); }catch(err){}
-  annotCur = { c: annotColor, w: annotPenWidth(e), pts: [p] };
-  annotDrawAll();
-});
-annotCanvasEl.addEventListener('pointermove', (e) => {
-  if(!annotCur) return;
-  e.preventDefault();
-  const p = annotPt(e);
-  const last = annotCur.pts[annotCur.pts.length-1];
-  if(Math.abs(p.x - last.x) + Math.abs(p.y - last.y) < 0.002) return;
-  annotCur.pts.push(p);
-  annotDrawAll();
-});
-function annotEndStroke(e){
-  if(!annotCur) return;
-  if(e && typeof e.clientX === 'number'){
-    const p = annotPt(e);
-    const last = annotCur.pts[annotCur.pts.length-1];
-    if(last && (Math.abs(p.x-last.x) + Math.abs(p.y-last.y)) > 0.002) annotCur.pts.push(p);
-  }
-  if(annotCur.pts.length) annotStrokes.push(annotCur);
-  annotCur = null;
-  annotDrawAll();
-  annotSave(true);
+/* 笔迹撤销 / 重做：每次改动前留一份快照 */
+let annotHist = [[]], annotHistIdx = 0, annotLastSurface = 'type';
+function annotSnap(){ return JSON.parse(JSON.stringify(annotStrokes)); }
+function annotHistReset(){ annotHist = [annotSnap()]; annotHistIdx = 0; }
+function annotHistPush(){
+  annotHist = annotHist.slice(0, annotHistIdx + 1);
+  annotHist.push(annotSnap());
+  annotHistIdx = annotHist.length - 1;
+  if(annotHist.length > 80){ annotHist.shift(); annotHistIdx--; }
+  annotUpdateUndoBtns();
 }
-annotCanvasEl.addEventListener('pointerup', annotEndStroke);
-annotCanvasEl.addEventListener('pointercancel', annotEndStroke);
-annotCanvasEl.addEventListener('pointerleave', annotEndStroke);
+function annotStrokeUndo(){
+  if(annotHistIdx <= 0) return false;
+  annotHistIdx--;
+  annotStrokes = JSON.parse(JSON.stringify(annotHist[annotHistIdx]));
+  annotDrawAll(); annotSave(true); annotUpdateUndoBtns();
+  return true;
+}
+function annotStrokeRedo(){
+  if(annotHistIdx >= annotHist.length - 1) return false;
+  annotHistIdx++;
+  annotStrokes = JSON.parse(JSON.stringify(annotHist[annotHistIdx]));
+  annotDrawAll(); annotSave(true); annotUpdateUndoBtns();
+  return true;
+}
+function annotUpdateUndoBtns(){
+  const u = $('#annotUndo'), r = $('#annotRedo'), fu = $('#afUndo'), fr = $('#afRedo');
+  const canU = annotHistIdx > 0, canR = annotHistIdx < annotHist.length - 1;
+  if(u) u.style.opacity = canU ? '' : '.45';
+  if(r) r.style.opacity = canR ? '' : '.45';
+  if(fu) fu.style.opacity = canU ? '' : '.45';
+  if(fr) fr.style.opacity = canR ? '' : '.45';
+}
+function annotUndoAct(redo){
+  if(annotLastSurface === 'draw'){
+    const ok = redo ? annotStrokeRedo() : annotStrokeUndo();
+    if(!ok) toast(redo ? '没有可重做的手写' : '没有可撤销的手写');
+    return;
+  }
+  if(annotLock){ toast('打字窗口已锁，先解锁再撤销'); return; }
+  if(annotTab !== 'type'){ annotTab = 'type'; annotSyncUI(); }
+  try{ annotTextEl.focus(); document.execCommand(redo ? 'redo' : 'undo'); annotSave(true); }catch(e){}
+}
+function annotBindDraw(el, gate){
+  el.addEventListener('pointerdown', (e) => {
+    if(gate && !gate()) return;
+    e.preventDefault();
+    const p = annotPtOn(el, e);
+    if(annotErase){ annotEraseAt(p, el); return; }
+    annotLastSurface = 'draw';
+    try{ el.setPointerCapture(e.pointerId); }catch(err){}
+    annotCur = { c: annotColor, w: annotPenWidth(e), pts: [p], _el: el };
+    annotDrawAll();
+  });
+  el.addEventListener('pointermove', (e) => {
+    if(!annotCur) return;
+    e.preventDefault();
+    const p = annotPtOn(el, e);
+    const last = annotCur.pts[annotCur.pts.length-1];
+    if(Math.abs(p.x - last.x) + Math.abs(p.y - last.y) < 0.002) return;
+    annotCur.pts.push(p);
+    annotDrawAll();
+  });
+  function end(e){
+    if(!annotCur) return;
+    const el0 = annotCur._el || el;
+    if(e && typeof e.clientX === 'number'){
+      const p = annotPtOn(el0, e);
+      const last = annotCur.pts[annotCur.pts.length-1];
+      if(last && (Math.abs(p.x-last.x) + Math.abs(p.y-last.y)) > 0.002) annotCur.pts.push(p);
+    }
+    if(annotCur.pts.length){
+      delete annotCur._el;
+      annotStrokes.push(annotCur);
+      annotHistPush();
+    }
+    annotCur = null;
+    annotDrawAll();
+    annotSave(true);
+  }
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  el.addEventListener('pointerleave', end);
+}
+annotBindDraw(annotCanvasEl, () => annotTab === 'draw');
+if(annotFloatCanvas) annotBindDraw(annotFloatCanvas, () => annotFloatOpen());
 
+/* —— 手写浮窗：长按「手写」拖出来 —— */
+function annotFloatPlace(){
+  if(annotFloatEl.dataset.pos) return;
+  const r = annotPanel.getBoundingClientRect();
+  const w = annotFloatEl.offsetWidth || 300;
+  const h = annotFloatEl.offsetHeight || 210;
+  let l = r.right + 10;
+  let t = Math.max(8, r.top);
+  if(l + w > window.innerWidth - 8){
+    // 横向放不下：先试窗口下方，再试上方，最后居中
+    l = Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - w - 8));
+    if(r.bottom + 8 + h <= window.innerHeight - 8){ t = r.bottom + 8; }
+    else if(r.top - 8 - h >= 8){ t = r.top - 8 - h; }
+    else { t = Math.max(8, window.innerHeight - h - 8); }
+  }
+  annotFloatEl.style.left = l + 'px';
+  annotFloatEl.style.top = t + 'px';
+  annotFloatEl.dataset.pos = '1';
+}
+function annotFloatOpenWin(){
+  if(!annotFloatEl) return;
+  annotFloatEl.classList.remove('hidden');
+  annotFloatPlace();
+  requestAnimationFrame(() => { annotSetupCanvasOne(annotFloatCanvas); annotDrawAll(); });
+  annotSyncUI();
+  toast('手写已拖成单独一窗，可随意拖动；打字窗继续用');
+}
+function annotFloatCloseWin(){
+  if(!annotFloatEl) return;
+  annotFloatEl.classList.add('hidden');
+  annotDrawAll();
+  annotSyncUI();
+}
+
+/* —— 浮窗拖动 —— */
+let annotFloatDragV = null;
+const annotFloatDrag = $('#annotFloatDrag');
+if(annotFloatDrag){
+  annotFloatDrag.addEventListener('pointerdown', (e) => {
+    if(e.target.closest('button')) return;
+    e.preventDefault();
+    const r = annotFloatEl.getBoundingClientRect();
+    annotFloatDragV = { dx: e.clientX - r.left, dy: e.clientY - r.top, id: e.pointerId };
+    try{ annotFloatDrag.setPointerCapture(e.pointerId); }catch(err){}
+  });
+  annotFloatDrag.addEventListener('pointermove', (e) => {
+    if(!annotFloatDragV) return;
+    e.preventDefault();
+    const w = annotFloatEl.offsetWidth, h = annotFloatEl.offsetHeight;
+    const l = Math.min(Math.max(4, e.clientX - annotFloatDragV.dx), Math.max(4, window.innerWidth - w - 4));
+    const t = Math.min(Math.max(4, e.clientY - annotFloatDragV.dy), Math.max(4, window.innerHeight - h - 4));
+    annotFloatEl.style.left = l + 'px';
+    annotFloatEl.style.top = t + 'px';
+  });
+  const fEnd = () => { annotFloatDragV = null; };
+  annotFloatDrag.addEventListener('pointerup', fEnd);
+  annotFloatDrag.addEventListener('pointercancel', fEnd);
+}
 /* —— 拖动窗口 —— */
 let annotDragV = null;
 annotDrag.addEventListener('pointerdown', (e) => {
