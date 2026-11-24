@@ -5356,16 +5356,18 @@ async function doLogin(){
     // 2.6) 「木泽」专属：知识锁之后还要再过两道——账号口令、安全员口令
     //      顺序固定：① 知识锁 → ② 账号口令 → ③ 安全员口令，错任何一道都进不去
     if(raw === ADMIN_NAME){
+      const bail = (msg, ms) => { toast(msg, ms || 2600); try{ openLogin(); }catch(e){} };
       const early2 = await waitAtMost(pullP, 4200);
-      if(early2 && !early2.__timeout && early2.data){ cloudData = early2.data; cloudAt = early2.at || 0; }      if(!cloudData && !localData){ toast('云端连不上，「木泽」的三道密码没法校验，稍后重试', 3000); return; }
+      if(early2 && !early2.__timeout && early2.data){ cloudData = early2.data; cloudAt = early2.at || 0; }
+      if(!cloudData && !localData){ bail('云端连不上，「木泽」的三道密码没法校验，稍后重试', 3000); return; }
 
       // ① 知识锁：以云端这一版为准（云端没开就不问）
       const lk = (cloudData && cloudData.meta && cloudData.meta.lock)
         || (localData && localData.meta && localData.meta.lock) || null;
       if(lk && lk.on && lk.hash && lk.armed === true && lk.hash !== passedHash){
         const pw1 = await askPassValue('第 1 道 · 知识锁', '「木泽」的登录密码', false);
-        if(!pw1){ toast('已取消登录'); return; }
-        if(await hashPass(pw1) !== lk.hash){ toast('第 1 道密码不对，无法进入', 2600); return; }
+        if(!pw1){ bail('已取消登录'); return; }
+        if(await hashPass(pw1) !== lk.hash){ bail('第 1 道密码不对，无法进入'); return; }
         passedHash = lk.hash;
         setLockOkCache(raw, lk.hash);
         knownPass = pw1;
@@ -5380,12 +5382,12 @@ async function doLogin(){
       };
       if(acct2 && acct2.on && acct2.hash){
         const pw2 = await askPassValue('第 2 道 · 账号口令', '输入「木泽」的账号口令', false);
-        if(!pw2){ toast('已取消登录'); return; }
-        if(await hashPass(pw2) !== acct2.hash){ toast('第 2 道密码不对，无法进入', 2600); return; }
+        if(!pw2){ bail('已取消登录'); return; }
+        if(await hashPass(pw2) !== acct2.hash){ bail('第 2 道密码不对，无法进入'); return; }
       }else{
         const np = await askPassValue('第 2 道 · 账号口令', '第一次要设一道账号口令（4 位以上），以后每次登录都要输入', true);
-        if(!np){ toast('已取消登录'); return; }
-        if(np.length < 4){ toast('账号口令至少 4 位', 2400); return; }
+        if(!np){ bail('已取消登录'); return; }
+        if(np.length < 4){ bail('账号口令至少 4 位', 2400); return; }
         acct2 = { on:true, hash: await hashPass(np), at: Date.now() };
         setAcct2(acct2);
         toast('第 2 道账号口令已设好，云端会记住它');
@@ -5396,22 +5398,22 @@ async function doLogin(){
       try{ prec = await passPull(); }catch(e){ prec = null; }
       if(prec){
         const pw3 = await askPassValue('第 3 道 · 安全员口令', '最后一道：安全员口令', false);
-        if(!pw3){ toast('已取消登录'); return; }
+        if(!pw3){ bail('已取消登录'); return; }
         const h3 = await hashPass(pw3), alt3 = fnvPass(pw3);
         if(!((h3 && h3 === prec.hash) || (alt3 && alt3 === prec.alt))){
-          toast('第 3 道密码不对，无法进入', 2600); return;
+          bail('第 3 道密码不对，无法进入'); return;
         }
         adminPassOk = true; adminPassPlain = pw3; adminPassOwner = raw;
       }else if(!cloudData){
-        toast('云端连不上，安全员口令校验不了，稍后重试', 3000); return;
+        bail('云端连不上，安全员口令校验不了，稍后重试', 3000); return;
       }else{
         const np3 = await askPassValue('第 3 道 · 安全员口令', '云端还没有安全员口令：现在设一条，至少 8 位', true);
-        if(!np3){ toast('已取消登录'); return; }
-        if(np3.length < 8){ toast('安全员口令至少 8 位', 2400); return; }
+        if(!np3){ bail('已取消登录'); return; }
+        if(np3.length < 8){ bail('安全员口令至少 8 位', 2400); return; }
         try{
           sysKeySet(await acctKeyOfPass(np3), sysKey);
           await passPush(np3);
-        }catch(e){ toast('安全员口令写入云端失败，稍后重试', 2800); return; }
+        }catch(e){ bail('安全员口令写入云端失败，稍后重试', 2800); return; }
         adminPassOk = true; adminPassPlain = np3; adminPassOwner = raw;
       }
     }
