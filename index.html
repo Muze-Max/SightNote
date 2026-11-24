@@ -6515,13 +6515,43 @@ function setSocialTab(tab){
 let adminCodeCache = '';
 let adminUserCache = { at:0, list:[] };
 let showHiddenUsers = false;
-/* 管理员「隐藏账户」：这份名单只存在本机，不影响对方、也不改云端档案 */
+/* 管理员「隐藏账户」：这份名单存在云端单独一行「#隐藏账号#」，换设备也保持一致；
+   不写进档案，所以不会被别的设备推旧档案冲掉，也不影响对方 */
 const ADMIN_HIDDEN_KEY = 'sww-admin-hidden';
+const HIDDEN_ROW = '#隐藏账号#';
+let adminHiddenCache = null;
+let adminHiddenAt = 0;
 function adminHiddenList(){
-  try{ const l = JSON.parse(localStorage.getItem(ADMIN_HIDDEN_KEY) || '[]'); return Array.isArray(l) ? l : []; }catch(e){ return []; }
+  if(Array.isArray(adminHiddenCache)) return adminHiddenCache;
+  try{ const l = JSON.parse(localStorage.getItem(ADMIN_HIDDEN_KEY) || '[]'); adminHiddenCache = Array.isArray(l) ? l : []; }catch(e){ adminHiddenCache = []; }
+  return adminHiddenCache;
 }
 function adminHiddenSet(l){
-  try{ localStorage.setItem(ADMIN_HIDDEN_KEY, JSON.stringify(l || [])); }catch(e){}
+  adminHiddenCache = (l || []).slice();
+  try{ localStorage.setItem(ADMIN_HIDDEN_KEY, JSON.stringify(adminHiddenCache)); }catch(e){}
+}
+async function adminHiddenPull(){
+  try{
+    const txt = await cloudReq('GET', '/rest/v1/shiwang_profiles?username=eq.' + encodeURIComponent(HIDDEN_ROW) + '&select=payload', null, null, 2);
+    const rows = JSON.parse(txt || '[]');
+    const row = rows && rows[0];
+    if(!row || !row.payload) return null;
+    let raw = row.payload;
+    if(raw.indexOf(CLOUD_GZ) === 0) raw = await decodePayload(raw);
+    if(raw.indexOf(CLOUD_PLAIN) !== 0) return null;
+    const env = JSON.parse(raw.slice(CLOUD_PLAIN.length));
+    const d = env && env.data;
+    const list = (d && Array.isArray(d.list)) ? d.list : null;
+    if(list) adminHiddenSet(list);
+    return list;
+  }catch(e){ return null; }
+}
+async function adminHiddenPush(){
+  const at = Date.now();
+  const body = CLOUD_PLAIN + JSON.stringify({ v:1, at, data: { list: adminHiddenList(), at } });
+  await cloudReq('POST', '/rest/v1/rpc/sww_save_row',
+    JSON.stringify({ p_user: HIDDEN_ROW, p_key: ACCT2_KEY, p_old: '', p_payload: body, p_updated: new Date().toISOString() }),
+    { Prefer: 'return=minimal' }, 2);
 }
 /* 拉一遍云端所有账号名（只读用户名，不下载档案），给「管理员下方」那份名单用 */
 async function adminUsersRefresh(force){
@@ -6547,6 +6577,11 @@ async function renderAdminPane(){
     if(line) line.textContent = '用户发来的工作消息 · 下方是所有普通账号，点任意一行就能直接发消息';
     renderEarth();
     const s2 = social();
+    // 隐藏名单以云端「#隐藏账号#」为准，进栏时顺手拉一次（15 秒内不重复拉）
+    if(Date.now() - adminHiddenAt > 15000){
+      adminHiddenAt = Date.now();
+      adminHiddenPull().then(l => { if(l) renderAdminPane(); }).catch(() => {});
+    }
     const adminChats = s2.adminChats || {};
     const names = Object.keys(adminChats).filter(n => (adminChats[n] || []).length && n !== BROADCAST_NAME && n !== ADMIN_NAME);
     const hint = $('#adminHint');
@@ -6621,7 +6656,9 @@ async function renderAdminPane(){
         if(hl.indexOf(n) >= 0) hl = hl.filter(x => x !== n);
         else hl.push(n);
         adminHiddenSet(hl);
+        adminHiddenAt = Date.now();
         renderAdminPane();
+        adminHiddenPush().catch(() => toast('隐藏名单同步失败，下次进栏会重试'));
       });
       box.appendChild(row);
     });
