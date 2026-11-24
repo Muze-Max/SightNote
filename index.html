@@ -4491,8 +4491,12 @@ async function hashPass(pw, salt){
   return sha256Hex((salt || 'sww-lock:') + pw);
 }
 let lockResolve = null;
+let lockHideTimer = null;
 function askPassValue(title, tip, withConfirm){
   return new Promise(resolve => {
+    // 上一轮弹窗还没被回答就被新的顶掉时，先把旧的放行，否则它背后的 doLogin 会永远卡住
+    if(lockResolve){ const prev = lockResolve; lockResolve = null; try{ prev(null); }catch(e){} }
+    if(lockHideTimer){ clearTimeout(lockHideTimer); lockHideTimer = null; }
     lockResolve = resolve;
     $('#lockTitle').textContent = title;
     $('#lockTip').textContent = tip;
@@ -4509,7 +4513,9 @@ function askPassValue(title, tip, withConfirm){
 function closeLock(v){
   const m = $('#lockModal');
   m.classList.remove('show');
-  setTimeout(() => m.classList.add('hidden'), 220);
+  // 关闭动画的隐藏定时器要能被下一次打开取消，否则 220ms 后会把刚弹出的新窗口盖掉
+  if(lockHideTimer) clearTimeout(lockHideTimer);
+  lockHideTimer = setTimeout(() => { lockHideTimer = null; m.classList.add('hidden'); }, 220);
   const r = lockResolve; lockResolve = null;
   if(r) r(v === undefined ? null : v);
 }
@@ -5105,7 +5111,7 @@ async function doLogin(){
       const guardOn = gRec ? !!gRec.on : true;   // 没有记录时默认开启
       const devLocal = deviceIsLocalOf(cloudData) || deviceIsLocalOf(localData) || devOkOf(raw);
       if(guardOn && !devLocal && gRec && gRec.hash){
-        const code = await askPassValue('设备安全码', '这台设备不是「木泽」的本地设备，输入安全密码才能登录', false);
+        const code = await askPassValue('设备安全码', '这台设备不是「木泽」的本地设备，输入设备安全码才能登录（不是上一步的知识锁密码）', false);
         if(!code){ toast('已取消登录'); return; }
         if((await hashPass(code)) !== gRec.hash){ toast('安全密码不对，这台设备不能登录', 2600); return; }
         guardPassed = true;
