@@ -5402,6 +5402,7 @@ async function doLogin(){
         if(!((h3 && h3 === prec.hash) || (alt3 && alt3 === prec.alt))){
           bail('第 3 道密码不对，无法进入'); return;
         }
+        try{ sysKeySet(await acctKeyOfPass(pw3), sysKey); }catch(e){}
         adminPassOk = true; adminPassPlain = pw3; adminPassOwner = raw;
       }else if(!cloudData){
         bail('云端连不上，安全员口令校验不了，稍后重试', 3000); return;
