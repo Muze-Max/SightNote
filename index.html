@@ -3711,7 +3711,24 @@ async function cloudPush(name, data){
           incoming = mergeData(fd, snap, { baseAt: (fresh && fresh.at) || 0, extraAt: at });
         }
       }
-    }catch(e){}
+    }catch(e){
+      // 读取云端失败时不能「看不见就盲写」：那样会把云端整份档案覆盖成空壳
+      setSyncLine('云端暂不可读，这次不覆盖，稍后自动重试');
+      return false;
+    }
+    // 硬保护：本机知识库/记忆库是空的（新设备 / 新浏览器空间刚登录）时，云端还有内容就绝不覆盖
+    if(hasNoContent(incoming)){
+      try{
+        const chk = await cloudPull(key, 2);
+        const cd = chk && chk.payload ? parseCloudPayload(chk.payload) : null;
+        if(cd && !hasNoContent(cd)){
+          const taken = sessionTakenBy(cd && cd.meta && cd.meta.session);
+          if(taken){ loseSession(taken); return false; }
+          incoming = mergeData(cd, incoming, { baseAt: (chk && chk.at) || 0, extraAt: at });
+          if(hasNoContent(incoming)) return false;   // 并了还是空，就别写了
+        }
+      }catch(e){ setSyncLine('云端暂不可读，这次不覆盖，稍后自动重试'); return false; }
+    }
     // 覆盖前的「旧版本备份」优先用内存里刚下载过的副本，避免每次保存都再下一遍整份档案
     let oldPayload = '';
     const cached = pullCache[key];
@@ -4288,6 +4305,14 @@ function isThinSnapshot(d){
   const edits = Object.keys(d.wordEdits || {}).length;
   const socialed = ((d.social || {}).friends || []).length + Object.keys((d.social || {}).chats || {}).length;
   return sets === 0 && words === 0 && views === 0 && edits === 0 && socialed === 0;
+}
+/* 只算「学习内容」是否为空：知识库词条 + 生熟词。
+   有的设备只剩好友/聊天，isThinSnapshot 会判成「不薄」，
+   于是空知识库照样覆盖了云端 —— 2026-11-24 木泽词库丢失就是这么发生的。 */
+function hasNoContent(d){
+  if(!d) return true;
+  const items = (d.customSets || []).reduce((s,x) => s + ((x.items && x.items.length) || 0), 0);
+  return items === 0 && (d.known || []).length === 0 && (d.unknown || []).length === 0;
 }
 const BAK_KEY = 'sww-cloud-bak@';
 let lastCloudSyncAt = 0;
