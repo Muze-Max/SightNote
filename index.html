@@ -3221,6 +3221,23 @@ function cloudAtRaw(name){
 function cloudAtSet(name, at){
   try{ localStorage.setItem(CLOUD_AT_KEY + (normName(name) || name), at || ''); }catch(e){}
 }
+/* 上次同步到云端的「内容量」记忆：词条数 + 生熟词数。
+   只存两个数字，不占空间，却能在本地内容突然变少时拉住覆盖动作。 */
+const CLOUD_CNT_KEY = 'sww-cloud-cnt@';
+function contentCount(d){
+  const items = (d && d.customSets || []).reduce((s,x) => s + (((x && x.items) || []).length), 0);
+  const words = ((d && d.known) || []).length + ((d && d.unknown) || []).length;
+  return { items, words };
+}
+function cloudCntGet(name){
+  try{ return JSON.parse(localStorage.getItem(CLOUD_CNT_KEY + (normName(name) || name)) || 'null'); }catch(e){ return null; }
+}
+function cloudCntSet(name, d){
+  try{
+    const c = contentCount(d);
+    localStorage.setItem(CLOUD_CNT_KEY + (normName(name) || name), JSON.stringify({ items:c.items, words:c.words, at:Date.now() }));
+  }catch(e){}
+}
 function cloudChangedSince(at, name){
   const c = cloudAtRaw(name);
   if(!c || !at) return true;
@@ -3675,6 +3692,12 @@ async function cloudPull(name, tries, keepTomb){
   const row = (rows && rows[0]) || null;
   if(!row) return null;
   if(row.payload) row.payload = await decodePayload(row.payload);   // 压缩档案在这里统一还原
+  if(row.payload){
+    try{
+      const env = parseCloudEnvelope(row.payload);
+      if(env && env.data) cloudCntSet(key, env.data);
+    }catch(e){}
+  }
   if(row.updated_at) cloudAtSet(key, row.updated_at);
   // 已注销的账号：默认当作查不到；登录时要单独提示，所以允许把这行原样带出
   if(!keepTomb && isRemovedRow(row)) return null;
@@ -3729,6 +3752,20 @@ async function cloudPush(name, data){
         }
       }catch(e){ setSyncLine('云端暂不可读，这次不覆盖，稍后自动重试'); return false; }
     }
+    // 缩水保护：本地内容比上次同步到的云端少了三成以上（丢过数据 / 误删一整套），
+    // 先把云端取回来合并，再写上去。绝不因为一次异常把云端大半词库删掉。
+    try{
+      const known = cloudCntGet(key);
+      const now = contentCount(incoming);
+      if(known && known.items >= 50 && now.items < known.items * 0.7){
+        const chk2 = await cloudPull(key, 2);
+        const cd2 = chk2 && chk2.payload ? parseCloudPayload(chk2.payload) : null;
+        if(cd2 && contentCount(cd2).items > now.items){
+          incoming = mergeData(cd2, incoming, { baseAt: (chk2 && chk2.at) || 0, extraAt: at });
+          setSyncLine('本机内容减少较多，已先与云端合并');
+        }
+      }
+    }catch(e){}
     // 覆盖前的「旧版本备份」优先用内存里刚下载过的副本，避免每次保存都再下一遍整份档案
     let oldPayload = '';
     const cached = pullCache[key];
@@ -3744,8 +3781,9 @@ async function cloudPush(name, data){
     if(oldFull && oldFull.data && !isThinSnapshot(oldFull.data)){
       // 云端已有内容时，不允许用空数据覆盖
       if(isThinSnapshot(incoming)) return false;
-      // 每 90 秒最多留一个回退点：本机备份 + 云端环形历史各一份
-      if(Date.now() - lastHistAt > 90000){
+      // 内容比云端少了不少、或距上次备份超过 90 秒，就留一个回退点（本机 + 云端环形历史）
+      const shrank = contentCount(incoming).items < contentCount(oldFull.data).items;
+      if(shrank || Date.now() - lastHistAt > 90000){
         try{ localStorage.setItem(BAK_KEY + key, JSON.stringify({ at: oldFull.at || Date.now(), payload: oldPayload })); }catch(e){}
         saveHistory(key, oldFull.at || Date.now(), oldPayload);
       }
@@ -3757,6 +3795,7 @@ async function cloudPush(name, data){
       JSON.stringify([{ username: key, payload: body, updated_at: stamp }]),
       { Prefer: 'resolution=merge-duplicates,return=minimal' }, 2);
     pushPrints[key] = richPrint(incoming);
+    cloudCntSet(key, incoming);
     pullCache[key] = { payload: payload, when: Date.now() };
     cloudAtSet(key, stamp);
     lastCloudSyncAt = at;
@@ -3764,6 +3803,11 @@ async function cloudPush(name, data){
     return true;
   }catch(e){
     cloudFailAt = Date.now();
+    if(String((e && e.message) || e).indexOf('BLOCKED_SHRINK') >= 0){
+      // 服务器端也有一道闸：新档案体积不足旧档案两成时直接拒绝，云端原档保持不动
+      setSyncLine('云端拒绝写入：内容骤减，已保留原档');
+      return false;
+    }
     if(String((e && e.message) || e).indexOf('BAD_KEY') >= 0){
       // 本机没有凭据（刷新后没重新登录），或口令在别的设备改过：把凭据找回来再重试
       writeKey = '';
@@ -3965,7 +4009,7 @@ function parseCloudEnvelope(payload){
    结果一个号能攒十几行、每行都是一整份几百 KB——库容和带宽都被它吃掉。
    现在固定用 #H1 / #H2 两个槽位轮流写：云端最多 2 份，不用删除，占用是常数。 */
 const HIST_MARK = '#H';
-const HIST_MAX = 2;
+const HIST_MAX = 4;
 const HIST_KEEP_MS = 24 * 60 * 60 * 1000;   // 回退列表只展示最近一天的版本
 const HIST_IDX_KEY = 'sww-hist-idx@';
 function histBase(name){ return normName(name) || name; }
