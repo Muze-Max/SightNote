@@ -8306,14 +8306,21 @@ function pickVoice(lang){
 }
 function doSpeakNow(t, lang){
   const synth = window.speechSynthesis;
+  if(!synth || typeof window.SpeechSynthesisUtterance !== 'function'){ return; }
   try{ if(synth.resume) synth.resume(); }catch(e){}
   let started = false, fellBack = false;
   const u = new window.SpeechSynthesisUtterance(t);
-  u.lang = lang;
   u.rate = 0.95;
   u.volume = 1;
   const v = pickVoice(lang);
-  if(v) u.voice = v;
+  if(v){ u.voice = v; u.lang = v.lang || lang; }
+  else{
+    // 系统里没有这门语音包（Windows 常见：只有中文包）：借一个现成的嗓，
+    // 总比彻底没声好；发音不准时联网音频那条路会接管
+    const any = voiceCache[0] || refreshVoices()[0] || null;
+    if(any){ u.voice = any; u.lang = any.lang || lang; }
+    else { u.lang = lang; }
+  }
   u.onstart = () => { started = true; };
   u.onerror = () => { if(!started && !fellBack){ fellBack = true; playTTS(t, lang); } };
   lastSpokenUtter = u;       // 持有引用，避免被回收后无声
@@ -8335,13 +8342,18 @@ function doSpeakNow(t, lang){
    - 太长的句子按标点切段依次播放，不会只读前半截。
    同一段文字只下载一次，第二次点击立刻出声。 */
 let ttsAudio = null;
+let ttsStartedGen = -1;              // 哪一次朗读请求真的出声了（用来判断联网音频有没有响）
 const ttsCache = new Map();          // text|lang -> HTMLAudioElement（已预取）
 let audioUnlocked = false;
 const TTS_CHUNK = 150;               // 单次请求的字数上限
-function ttsUrl(t, lang){
+function ttsUrl(t, lang, alt){
   const txt = String(t || '').trim();
   const lg = lang || detectLang(txt);
   const isEn = lg.indexOf('en') === 0;
+  // alt=1 走另一家服务：一家挂了还能出声（有道支持中英日韩，百度对整句更稳）
+  if(alt){
+    return 'https://dict.youdao.com/dictvoice?type=2&audio=' + encodeURIComponent(txt);
+  }
   if(isEn && !/\s/.test(txt) && txt.length <= 40){
     return 'https://dict.youdao.com/dictvoice?type=2&audio=' + encodeURIComponent(txt);
   }
@@ -8429,17 +8441,18 @@ function playChunk(gen, lg, tries){
   let a = ttsCache.get(text + '|' + lg) || prefetchTTS(text, lg);
   if(!a){ ttsQueue.shift(); return playChunk(gen, lg, 0); }
   ttsAudio = a;
+  a.onplaying = () => { if(gen === ttsGen) ttsStartedGen = gen; };
   let phase = tries || 0;
   let fired = false;
   const fail = () => {
     if(gen !== ttsGen || fired) return;
     fired = true;
     if(phase === 0){
-      // 第一层兜底：换一条带时间戳的地址重取一次（微信偶发拦截 / 缓存坏包）
+      // 第一层兜底：换另一家发音服务 + 带时间戳重取（一家挂了 / 微信偶发拦截 / 缓存坏包）
       phase = 1;
       setTimeout(() => { fired = false; }, 60);   // 同一次失败可能触发 onerror + play 拒绝，隔开一点
       try{
-        a.src = ttsUrl(text, lg) + '&t=' + Date.now();
+        a.src = ttsUrl(text, lg, 1) + '&t=' + Date.now();
         const p = a.play();
         if(p && p.catch) p.catch(() => setTimeout(fail, 90));
         return;
@@ -8469,14 +8482,28 @@ function playChunk(gen, lg, tries){
 function speakWord(txt){
   const t = String(txt || '').trim();
   if(!t) return;
-  const lang = detectLang(t);
-  const canSpeech = ('speechSynthesis' in window) && (typeof window.SpeechSynthesisUtterance === 'function');
-  if(!canSpeech){ playTTS(t, lang); return; }
-  const synth = window.speechSynthesis;
-  try{ if(synth.cancel) synth.cancel(); }catch(e){}
-  // 不再要求「必须装了这个语言的语音包」：中文手机常常只有普通话包，
-  // 但引擎照样能用默认嗓把英文读出来；真的没起声会在 900ms 后自动换联网音频
-  doSpeakNow(t, lang);
+  speakSmart(t, detectLang(t));
+}
+/* 朗读总入口，顺序反过来：先用联网发音（各端都真能出声），
+   只有联网音频 1.8 秒还没响，才交给系统语音。
+   以前是让系统语音先试 900ms：Windows 上只装了中文语音包，
+   读英文时它会 speaking=true 却永不触发 onstart，白白等一秒还可能被 cancel 卡住。 */
+function speakSmart(text, lang){
+  const t = String(text || '').trim();
+  if(!t) return;
+  const lg = lang || detectLang(t);
+  try{ if(window.speechSynthesis) window.speechSynthesis.cancel(); }catch(e){}
+  const before = ttsGen;
+  playTTS(t, lg);
+  const myGen = ttsGen;
+  if(myGen === before) return;        // 没有可播内容
+  setTimeout(() => {
+    if(myGen !== ttsGen) return;       // 已经被新的朗读请求接管
+    if(ttsStartedGen === myGen) return; // 联网音频已经在响
+    const a = ttsAudio;
+    if(a && !a.paused && !a.ended && (a.readyState || 0) >= 2) return;  // 还在加载/正在响，别抢
+    doSpeakNow(t, lg);
+  }, 1800);
 }
 
 /* 页面上所有「① 内容」都挂 data-say：点一下就朗读，不用先打开释义卡。
@@ -8495,14 +8522,7 @@ document.addEventListener('click', (e) => {
 });
 function playVoice(m){
   if(!m || !m.text){ toast('这条语音没有可朗读的文字'); return; }
-  if(!('speechSynthesis' in window)){ toast('这个设备不支持语音播放'); return; }
-  try{
-    window.speechSynthesis.cancel();
-    const u = new window.SpeechSynthesisUtterance(m.text);
-    u.lang = 'zh-CN';
-    u.rate = 1;
-    window.speechSynthesis.speak(u);
-  }catch(e){ toast('播放失败，换个浏览器试试'); }
+  speakSmart(m.text, 'zh-CN');
 }
 
 function renderChat(){
