@@ -2011,11 +2011,11 @@
     <div class="sheet-body">
       <!-- 文字 -->
       <div class="pane on" id="paneText">
-        <textarea id="textInput" placeholder="abandon&#10;v.&#10;放弃&#10;词根 ab- 强调 + andon 放弃&#10;&#10;give up&#10;phr.&#10;放弃&#10;（备注可空）"></textarea>
+        <textarea id="textInput" placeholder="abandon→v.→放弃→词根 ab- 强调 + andon 放弃&#10;give up→phr.→放弃&#10;abstract→adj.→抽象的→词根 ab- 强调 + tract 拉/抽&#10;The plan failed.→→计划失败了。"></textarea>
         <p class="format-tip">
-          每四行一条，顺序对应记忆存储的前四行：<br>
-          第一行 ① 内容 → 第二行 ③ 词性 → 第三行 ② 释义 → 第四行 ④ 备注 / 词根。<br>
-          词性与备注可留空行；条目之间空一行即可。类型（单词 / 短语 / 句子）自动判断。
+          每行一条，四段之间只用「→」隔开，顺序就是记忆存储的前四行：<br>
+          ① 内容 → ③ 词性 → ② 释义 → ④ 备注 / 词根。<br>
+          词性或备注不需要就留空（写成「give up→phr.→放弃」或「a→→释义→备注」都行），不要用逗号、空格替代「→」。类型（单词 / 短语 / 句子）自动判断。
         </p>
       </div>
 
@@ -10327,62 +10327,52 @@ function autoTypeOf(en){
   const words = String(en || '').trim().split(/\s+/).filter(Boolean).length;
   return (/[.?!]$/.test(en) || words >= 5) ? 'sentence' : (words >= 2 ? 'phrase' : 'word');
 }
+/* 文字导入：一行一条，四段之间只用「→」隔开，顺序为
+   ① 内容 → ③ 词性 → ② 释义 → ④ 备注 / 词根（对应记忆存储的前四行） */
 function parseMemoryText(text){
   const out = [];
   const seen = new Set();
-  let cur = null;
 
-  const push = () => {
-    if(!cur) return;
-    const en = cur.en.trim();
-    if(en && /[A-Za-z]/.test(en)){
-      const k = en.toLowerCase();
-      if(!seen.has(k)){
-        seen.add(k);
-        out.push({ en, pos: cur.pos, zh: cur.zh || '未填写释义', root: cur.root, type: autoTypeOf(en) });
-      }
-    }
-    cur = null;
-  };
+  const cleanSeg = s => String(s == null ? '' : s)
+    .replace(/^[①②③④⑤⑥⑦⑧⑨⑩\s]+/, '')
+    .replace(/^(?:词性|释义|中文|词根|备注|内容|英文)\s*[:：]\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 
   text.split(/\r?\n/).forEach(raw => {
-    let line = String(raw).replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ').trim();
-    if(!line) return;
-    // 去掉 ①②③④ 这类序号与「词性：」「释义：」这类小标签
-    line = line.replace(/^[①②③④⑤⑥⑦⑧⑨⑩\-–—*·•>]+\s*/, '')
-               .replace(/^(?:词性|释义|中文|词根|备注|内容|英文)\s*[:：]\s*/, '')
-               .trim();
-    if(!line) return;
+    let line = String(raw).replace(/\u00a0/g, ' ');
+    if(!line.trim()) return;
+    // 允许写成 -> 或 ⇒，但规范只认「→」
+    const segs = line.split(/\s*(?:→|->|⇒)\s*/).map(cleanSeg);
+    if(segs.length < 2) return;          // 没有「→」不能算一条
 
-    if(POS_TOKEN.test(line)){
-      if(cur) cur.pos = cur.pos || line;
-      return;
-    }
+    let en = segs[0];
+    if(!en || !/[A-Za-z]/.test(en)) return;
+    let pos = segs[1] || '';
+    let zh = segs[2] || '';
+    let root = segs.slice(3).filter(Boolean).join('；');
 
-    if(CJK.test(line)){
-      if(cur){
-        if(!cur.zh) cur.zh = line.replace(/^[\s:：\-–—,，;；|]+/, '').trim();
-        else cur.root = (cur.root ? cur.root + '；' : '') + line;
+    // 第二段不是词性时，说明用户省略了③，这段其实是释义
+    if(pos && !POS_TOKEN.test(pos)){
+      if(/[\u4E00-\u9FFF]/.test(pos)){
+        if(!zh) zh = pos;
+        else root = (root ? root + '；' : '') + pos;
+        pos = '';
       }
-      return;    // 还没有对应的内容行，中文行先跳过
     }
-
-    if(!/[A-Za-z]/.test(line)) return;
-    // 新的内容行（①）：先把上一条收好
-    push();
-    let en = line.replace(/\/[^\/]{1,30}\//g, ' ')                  // 去掉音标
-                  .replace(/^\d+\s*[.)、]\s*/, '')                    // 去掉序号
-                  .replace(/[\s\-–—:：,，;；\/|]+$/,'')
-                  .replace(/^[\s\-–—:：,，;；|]+/,'')
-                  .replace(/\s+/g,' ').trim();
-    let pos = '';
+    // 段尾可能带词性：「abandon v.→放弃」
     const m = en.match(/\s*((?:n|v|vt|vi|adj|adv|prep|pron|conj|num|art|int|aux|phr)\.(?:\s*\/\s*(?:n|v|vt|vi|adj|adv)\.)?)$/i);
-    if(m){ pos = m[1].trim(); en = en.slice(0, m.index).trim(); }
-    cur = { en, pos, zh:'', root:'' };
+    if(m){ pos = pos || m[1].trim(); en = en.slice(0, m.index).trim(); }
+    en = en.replace(/\/[^\/]{1,30}\//g, ' ').replace(/\s+/g, ' ').trim();
+    if(!en) return;
+
+    const k = en.toLowerCase();
+    if(seen.has(k)) return;
+    seen.add(k);
+    out.push({ en, pos, zh: zh || '未填写释义', root, type: autoTypeOf(en) });
   });
-  push();
   return out;
-}       
+}
 
 function parseText(text){
   const out = [];
