@@ -1632,6 +1632,21 @@
       <div class="hint-mini" id="adminHint" style="margin:10px 2px 0;font-size:10.5px;color:#b0b0a6;">
         这里是和管理员的工作沟通渠道，和好友私聊互不相通。
       </div>
+
+      <div id="earthBox" style="display:none;margin-top:18px;">
+        <div class="sec-head" style="margin-top:4px;">
+          <h2>地球村</h2>
+          <span class="note" id="earthNote">准许注册的用户名</span>
+        </div>
+        <div class="social-add">
+          <input id="earthInput" maxlength="20" placeholder="输入要准许注册的用户名" spellcheck="false">
+          <button class="btn-line" id="earthAdd" style="padding:9px 16px;font-size:11.5px;">准许</button>
+        </div>
+        <div id="earthList"></div>
+        <div class="hint-mini" style="margin:8px 2px 0;font-size:10.5px;color:#b0b0a6;">
+          名单为空时，只有在册的老账号能登录；新名字要先在这里准许才能进门。
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -5329,6 +5344,15 @@ async function doLogin(){
     }
     if(cloudAt) lastCloudSyncAt = cloudAt;
 
+    // 4) 新账号注册准许：云端没有这个号、本机也没存过，就得先被「地球村」准许
+    if(!localData && !existed && !(pulled && pulled.row) && !legacy && raw !== ADMIN_NAME){
+      const allow = await regLoad(true);
+      if(!allow || allow.indexOf(normName(raw)) < 0){
+        toast('「' + raw + '」还没有被准许注册，请找管理员在 视窗 → 管理员 → 地球村 里加上这个用户名', 4200);
+        return;
+      }
+    }
+
     // 4) 云端说的锁和本机记住的不一样（改过密码）→ 按云端再验一次
     const cloudHash = (cloudData && cloudData.meta && cloudData.meta.lock && cloudData.meta.lock.on)
       ? (cloudData.meta.lock.hash || '') : '';
@@ -6357,6 +6381,7 @@ async function renderAdminPane(){
   // 管理员这栏：普通用户发来的消息（存在 adminChats，和好友聊天不交叉）
   if(isAdmin()){
     if(line) line.textContent = '用户发来的工作消息';
+    renderEarth();
     const names = Object.keys(s.adminChats || {}).filter(n => (s.adminChats[n] || []).length && n !== BROADCAST_NAME);
     const hint = $('#adminHint');
     box.innerHTML = '';
@@ -6397,6 +6422,68 @@ async function renderAdminPane(){
       '<div class="sub">系统管理员 · 点开直接留言</div></span>';
   row.addEventListener('click', () => openAdminChat('admin'));
   box.appendChild(row);
+}
+
+/* ---------- 地球村：新账号注册准许名单（只由管理员维护） ---------- */
+const REG_ROW = '#准许注册#';
+let regAllowCache = null;
+async function regLoad(force){
+  if(regAllowCache && !force) return regAllowCache;
+  try{
+    const row = await cloudPull(REG_ROW);
+    const d = row ? parseCloudPayload(row.payload) : null;
+    regAllowCache = (d && Array.isArray(d.allow)) ? d.allow.map(normName).filter(Boolean) : [];
+  }catch(e){ regAllowCache = null; }
+  return regAllowCache;
+}
+async function regSave(list){
+  const clean = Array.from(new Set((list || []).map(normName).filter(Boolean)));
+  const at = Date.now();
+  const stamp = new Date(at).toISOString();
+  const payload = CLOUD_PLAIN + JSON.stringify({ v:1, name: REG_ROW, at, data: { allow: clean } });
+  const body = await encodePayloadText(payload);
+  for(const k of msgKeysFor(currentUser)){
+    try{
+      await cloudReq('POST', '/rest/v1/rpc/sww_save_row',
+        JSON.stringify({ p_user: REG_ROW, p_key: k, p_payload: body, p_updated: stamp, p_old: null }), null, 2);
+      regAllowCache = clean;
+      cloudAtSet(REG_ROW, stamp);
+      return true;
+    }catch(e){}
+  }
+  return false;
+}
+async function renderEarth(){
+  const box = $('#earthBox');
+  if(!box) return;
+  if(!isAdmin()){ box.style.display = 'none'; return; }
+  box.style.display = '';
+  const list = await regLoad(true) || [];
+  const note = $('#earthNote');
+  if(note) note.textContent = list.length ? ('已准许 ' + list.length + ' 个') : '准许注册的用户名';
+  const b = $('#earthList');
+  if(!b) return;
+  b.innerHTML = '';
+  if(!list.length){
+    b.innerHTML = '<div class="transit-empty">还没有准许任何人——新用户现在进不来</div>';
+    return;
+  }
+  list.slice().sort((x, y) => x.localeCompare(y)).forEach(n => {
+    const row = document.createElement('div');
+    row.className = 'req-row';
+    const nm = document.createElement('span');
+    nm.className = 'nm'; nm.textContent = n;
+    const dl = document.createElement('button');
+    dl.className = 'btn-line'; dl.textContent = '移除';
+    dl.addEventListener('click', async () => {
+      const rest = (regAllowCache || []).filter(x => x !== n);
+      const ok = await regSave(rest);
+      if(ok){ toast('已取消「' + n + '」的注册准许'); renderEarth(); }
+      else toast('云端没写进去，稍后再试', 2600);
+    });
+    row.appendChild(nm); row.appendChild(dl);
+    b.appendChild(row);
+  });
 }
 
 /* ---------- 交友：云端信号强化（角标 / 轮询 / 失败补发） ---------- */
@@ -9061,6 +9148,20 @@ if($('#socialSeg')) $('#socialSeg').addEventListener('click', e => {
   const b = e.target.closest('.seg-btn');
   if(b) setSocialTab(b.dataset.seg);
 });
+/* ---------- 地球村：准许注册 ---------- */
+async function earthAddName(){
+  if(!isAdmin()) return;
+  const inp = $('#earthInput');
+  const n = normName((inp && inp.value) || '');
+  if(!n){ toast('先输入一个用户名'); if(inp) inp.focus(); return; }
+  const list = (await regLoad(true)) || [];
+  if(list.indexOf(n) >= 0){ toast('「' + n + '」已经在名单里了'); inp.value = ''; return; }
+  const ok = await regSave(list.concat([n]));
+  if(ok){ inp.value = ''; toast('已准许「' + n + '」注册', 2600); renderEarth(); }
+  else toast('云端没写进去，稍后再试', 2600);
+}
+if($('#earthAdd')) $('#earthAdd').addEventListener('click', earthAddName);
+if($('#earthInput')) $('#earthInput').addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); earthAddName(); } });
 
 /* ================== 菜单渲染 ================== */
 function setTree(){
