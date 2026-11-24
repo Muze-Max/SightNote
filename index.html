@@ -5743,7 +5743,7 @@ function showView(v){
       el.classList.add('hidden');
     }
   });
-  if(v !== $('#viewStudy')){ hideCard(); try{ closeAnnot(); }catch(err){} }
+  if(v !== $('#viewStudy')){ hideCard(); try{ closeAnnot(true); }catch(err){} }
   const tabIds = ['viewMenu','viewBooks','viewMe'];
   const bar = $('#tabbar');
   if(bar){
@@ -10833,7 +10833,7 @@ function openAnnot(item, el){
   annotErase = false;
   annotLock = !!(rec && rec.lock);
   annotHistReset();
-  if(annotFloatEl){ annotFloatEl.classList.add('hidden'); delete annotFloatEl.dataset.pos; }
+  // 手写浮窗是同级独立窗口：切换/重开批注时不收起，只有它自己的 × 或彻底退出批注模式才关
   const w = item.en || '';
   $('#annotWord').textContent = w.length > 18 ? w.slice(0,18) + '…' : w;
 
@@ -10851,17 +10851,21 @@ function openAnnot(item, el){
   annotClamp();
   annotSyncUI();
   if(annotTab === 'draw') requestAnimationFrame(annotSetupCanvas);
+  if(annotFloatOpen()) requestAnimationFrame(() => { annotSetupCanvasOne(annotFloatCanvas); annotDrawAll(); });
   if(el) el.classList.add('active');
 }
-function closeAnnot(){
-  if(annotPanel.classList.contains('hidden')) return;
+function closeAnnot(all){
+  if(annotPanel.classList.contains('hidden') && !(all && annotFloatOpen())) return;
   annotPanel.classList.add('hidden');
-  if(annotFloatEl){ annotFloatEl.classList.add('hidden'); delete annotFloatEl.dataset.pos; }
   annotSave(false);
   clearActive();
-  annotKey = '';
-  annotStrokes = [];
-  annotCur = null;
+  if(all || !annotFloatOpen()){
+    if(annotFloatEl){ annotFloatEl.classList.add('hidden'); delete annotFloatEl.dataset.pos; }
+    annotKey = '';
+    annotStrokes = [];
+    annotCur = null;
+  }
+  // 手写浮窗还开着：保留当前批注上下文，浮窗继续写、继续存
 }
 function annotClamp(){
   const r = annotPanel.getBoundingClientRect();
@@ -10879,7 +10883,7 @@ $('#penBtn').addEventListener('click', () => {
   const b = $('#penBtn');
   b.classList.toggle('on', annotOn);
   b.setAttribute('aria-pressed', annotOn ? 'true' : 'false');
-  if(!annotOn) closeAnnot();
+  if(!annotOn) closeAnnot(true);
   toast(annotOn ? '批注模式：点单词即可写批注' : '已退出批注模式');
 });
 $('#closeAnnot').addEventListener('click', closeAnnot);
