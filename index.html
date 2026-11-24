@@ -6514,6 +6514,15 @@ function setSocialTab(tab){
 /* ---------- 管理员：与好友同级的独立栏 ---------- */
 let adminCodeCache = '';
 let adminUserCache = { at:0, list:[] };
+let showHiddenUsers = false;
+/* 管理员「隐藏账户」：这份名单只存在本机，不影响对方、也不改云端档案 */
+const ADMIN_HIDDEN_KEY = 'sww-admin-hidden';
+function adminHiddenList(){
+  try{ const l = JSON.parse(localStorage.getItem(ADMIN_HIDDEN_KEY) || '[]'); return Array.isArray(l) ? l : []; }catch(e){ return []; }
+}
+function adminHiddenSet(l){
+  try{ localStorage.setItem(ADMIN_HIDDEN_KEY, JSON.stringify(l || [])); }catch(e){}
+}
 /* 拉一遍云端所有账号名（只读用户名，不下载档案），给「管理员下方」那份名单用 */
 async function adminUsersRefresh(force){
   if(!force && Date.now() - adminUserCache.at < 20000 && adminUserCache.list.length) return null;
@@ -6552,7 +6561,18 @@ async function renderAdminPane(){
         '<div class="sub">' + escapeHtml(displayName(currentUser) || currentUser) + ' · 系统身份</div></span>';
     box.appendChild(meRow);
 
+    // 飞信置顶：管理员专用，一条发给所有普通用户
+    const fxRow = document.createElement('div');
+    fxRow.className = 'friend-row';
+    fxRow.innerHTML =
+      '<span class="av">信</span>' +
+      '<span class="who"><span class="nm">' + escapeHtml(BROADCAST_NAME) + '</span>' +
+        '<div class="sub">置顶 · 发给所有普通用户</div></span>';
+    fxRow.addEventListener('click', () => openAdminChat(BROADCAST_NAME));
+    box.appendChild(fxRow);
+
     // 所有普通账号：先把有聊天记录的按时间排前面，其余按名字排在后面
+    const hiddenList = adminHiddenList();
     const all = adminUserCache.list.slice();
     const withChat = names.slice();
     const rest = all.filter(n => withChat.indexOf(n) < 0);
@@ -6570,18 +6590,39 @@ async function renderAdminPane(){
       return (lb.at || 0) - (la.at || 0);
     });
     const shown = withChat.concat(rest);
-    shown.forEach(n => {
+    const visible = shown.filter(n => showHiddenUsers || hiddenList.indexOf(n) < 0);
+    const hiddenCount = shown.filter(n => hiddenList.indexOf(n) >= 0).length;
+    if(hiddenCount){
+      const tg = document.createElement('div');
+      tg.className = 'sub';
+      tg.style.cssText = 'padding:9px 6px;cursor:pointer;opacity:.75';
+      tg.textContent = showHiddenUsers ? '收起已隐藏的 ' + hiddenCount + ' 个账号' : '已隐藏 ' + hiddenCount + ' 个账号 · 点一下显示';
+      tg.addEventListener('click', () => { showHiddenUsers = !showHiddenUsers; renderAdminPane(); });
+      box.appendChild(tg);
+    }
+    visible.forEach(n => {
       const list = adminChats[n] || [];
       const last = list[list.length - 1] || {};
       const unread = (last.at || 0) > (Number(s2.adminRead[n]) || 0) && last.from !== currentUser;
+      const isHidden = hiddenList.indexOf(n) >= 0;
       const row = document.createElement('div');
       row.className = 'friend-row';
       row.innerHTML =
         '<span class="av">' + escapeHtml((displayName(n) || n).slice(0, 1)) + '</span>' +
         '<span class="who"><span class="nm">' + escapeHtml(displayName(n)) + '</span>' +
           '<div class="sub">' + escapeHtml(last.text ? ((last.from === currentUser ? '我：' : '') + last.text.slice(0, 18)) : '点开给 ta 发消息') + '</div></span>' +
-        (unread ? '<span class="badge">新</span>' : '');
+        (unread ? '<span class="badge">新</span>' : '') +
+        '<span class="hidbtn" style="margin-left:auto;padding:4px 6px;font-size:10.5px;color:#9a9a92;cursor:pointer;flex:none">' + (isHidden ? '恢复' : '隐藏') + '</span>';
       row.addEventListener('click', () => openAdminChat(n));
+      const hb = row.querySelector('.hidbtn');
+      if(hb) hb.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        let hl = adminHiddenList();
+        if(hl.indexOf(n) >= 0) hl = hl.filter(x => x !== n);
+        else hl.push(n);
+        adminHiddenSet(hl);
+        renderAdminPane();
+      });
       box.appendChild(row);
     });
     // 后台刷新一次账号列表，拿到新注册的号再重画
