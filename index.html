@@ -1424,12 +1424,18 @@
   .annot-lock.on{background:#fdecec;border-color:#f0bcbc;color:#b03a2e;}
   .annot-text.locked{background:#fbfbf6;cursor:not-allowed;}
   .annot.float{
-    position:fixed;z-index:78;width:300px;height:210px;
+    position:fixed;z-index:78;width:320px;height:240px;
+    min-width:240px;min-height:170px;
     display:flex;flex-direction:column;background:#fff;
     border:1px solid var(--line);border-radius:14px;
     box-shadow:0 18px 40px -16px rgba(30,30,24,.34);overflow:hidden;
   }
   .annot.float.hidden{display:none !important;}
+  .annot.float .cdot{width:14px;height:14px;flex:0 0 14px;}
+  .annot.float .annot-bar{padding:6px 9px;gap:5px;}
+  .annot.float .abtn{padding:3px 7px;font-size:10px;}
+  .annot.float .annot-body{border-radius:0;}
+  .annot.float .annot-resize{z-index:2;}
   .annot .close-x{
     position:static;width:22px;height:22px;line-height:20px;
     border:0;background:transparent;color:var(--faint);font-size:16px;cursor:pointer;
@@ -2252,12 +2258,27 @@
     <div class="annot-undo" style="margin-left:auto;">
       <button type="button" class="abtn" id="afUndo" title="撤销">↶</button>
       <button type="button" class="abtn" id="afRedo" title="重做">↷</button>
-      <button type="button" class="abtn" id="afEraser" title="橡皮擦">橡皮</button>
-      <button type="button" class="abtn" id="afClear" title="清空手写">清空</button>
     </div>
     <button class="close-x" id="afClose" aria-label="收起手写窗">×</button>
   </div>
+  <div class="annot-bar">
+    <button type="button" class="cdot on" data-color="#23231f" style="--c:#23231f" title="黑色"></button>
+    <button type="button" class="cdot" data-color="#2a5bd7" style="--c:#2a5bd7" title="蓝色"></button>
+    <button type="button" class="cdot" data-color="#d3402f" style="--c:#d3402f" title="红色"></button>
+    <span class="annot-sep"></span>
+    <button type="button" class="abtn" id="afSizeMinus" title="笔细一点">A−</button>
+    <span class="annot-size" id="afSizeNow">16</span>
+    <button type="button" class="abtn" id="afSizePlus" title="笔粗一点">A+</button>
+    <span class="annot-sep"></span>
+    <button type="button" class="abtn" id="afEraser" title="橡皮擦">橡皮</button>
+    <button type="button" class="abtn af-esz" data-esz="12" title="细橡皮">小</button>
+    <button type="button" class="abtn af-esz on" data-esz="24" title="中橡皮">中</button>
+    <button type="button" class="abtn af-esz" data-esz="40" title="粗橡皮">大</button>
+    <span class="annot-sep"></span>
+    <button type="button" class="abtn" id="afClear" title="清空手写">清空</button>
+  </div>
   <div class="annot-body"><canvas id="annotFloatCanvas"></canvas></div>
+  <div class="annot-resize" id="afResize" title="拖动调整大小"></div>
 </div>
 
 <!-- ============== 知识库：视途（跨用户迁移） ============== -->
@@ -10599,6 +10620,8 @@ let annotOn = false;         // 批注模式开关
 let annotKey = '';           // 当前单词的 key
 let annotColor = '#23231f';
 let annotSize = 16;
+let annotPenSize = 16;       // 手写浮窗的笔粗细
+let annotEraseSize = 24;     // 橡皮半径（屏幕 px）
 let annotLock = false;       // 打字窗口锁定后不能改内容
 let annotErase = false;
 let annotTab = 'type';
@@ -10746,6 +10769,8 @@ function annotSave(skipRender){
     html: html,
     size: annotSize,
     color: annotColor,
+    pen: annotPenSize,
+    esz: annotEraseSize,
     lock: !!annotLock,
     strokes: annotStrokes.map(s => ({
       c: s.c, w: s.w, pts: s.pts.map(p => ({ x: +p.x.toFixed(4), y: +p.y.toFixed(4) }))
@@ -10773,6 +10798,12 @@ function annotSyncUI(){
   if(lockBtn){ lockBtn.classList.toggle('on', !!annotLock); lockBtn.textContent = annotLock ? '已锁' : '锁'; }
   const af = $('#afEraser');
   if(af){ af.classList.toggle('on', annotErase); af.textContent = annotErase ? '橡皮(开)' : '橡皮'; }
+  if(annotFloatEl){
+    annotFloatEl.querySelectorAll('.cdot').forEach(d => d.classList.toggle('on', d.dataset.color === annotColor));
+    annotFloatEl.querySelectorAll('.af-esz').forEach(b => b.classList.toggle('on', +b.dataset.esz === annotEraseSize));
+    const fsz = $('#afSizeNow');
+    if(fsz) fsz.textContent = String(annotPenSize);
+  }
   annotUpdateUndoBtns();
   $('#sizeNow').textContent = String(annotSize);
   annotTextEl.style.fontSize = annotSize + 'px';
@@ -10797,6 +10828,8 @@ function openAnnot(item, el){
     : '';
   annotSize = rec && rec.size ? Math.min(32, Math.max(12, rec.size)) : 16;
   annotColor = rec && rec.color ? rec.color : '#23231f';
+  annotPenSize = rec && rec.pen ? Math.min(40, Math.max(6, rec.pen)) : 16;
+  annotEraseSize = rec && rec.esz ? Math.min(60, Math.max(8, rec.esz)) : 24;
   annotErase = false;
   annotLock = !!(rec && rec.lock);
   annotHistReset();
@@ -10904,6 +10937,57 @@ $('#afClear').addEventListener('click', () => {
   toast('已清空手写');
 });
 
+/* 手写浮窗：颜色 / 笔粗细 / 橡皮大小 */
+annotFloatEl.querySelectorAll('.cdot').forEach(d => {
+  d.addEventListener('click', () => {
+    annotColor = d.dataset.color;
+    annotSyncUI();
+    annotSave(true);
+  });
+});
+$('#afSizeMinus').addEventListener('click', () => {
+  annotPenSize = Math.max(6, annotPenSize - 2);
+  annotSyncUI(); annotSave(true);
+});
+$('#afSizePlus').addEventListener('click', () => {
+  annotPenSize = Math.min(40, annotPenSize + 2);
+  annotSyncUI(); annotSave(true);
+});
+annotFloatEl.querySelectorAll('.af-esz').forEach(b => {
+  b.addEventListener('click', () => {
+    annotEraseSize = +b.dataset.esz;
+    annotSyncUI(); annotSave(true);
+  });
+});
+
+/* 手写浮窗：拖动右下角调大小 */
+let afRz = null;
+const afResize = $('#afResize');
+if(afResize){
+  afResize.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const r = annotFloatEl.getBoundingClientRect();
+    afRz = { x: e.clientX, y: e.clientY, w: r.width, h: r.height };
+    try{ afResize.setPointerCapture(e.pointerId); }catch(err){}
+  });
+  afResize.addEventListener('pointermove', (e) => {
+    if(!afRz) return;
+    e.preventDefault();
+    const w = Math.min(Math.max(240, afRz.w + (e.clientX - afRz.x)), Math.max(240, window.innerWidth - 16));
+    const h = Math.min(Math.max(170, afRz.h + (e.clientY - afRz.y)), Math.max(170, window.innerHeight - 16));
+    annotFloatEl.style.width = w + 'px';
+    annotFloatEl.style.height = h + 'px';
+    const fl = parseFloat(annotFloatEl.style.left) || 0;
+    const ft = parseFloat(annotFloatEl.style.top) || 0;
+    if(fl + w > window.innerWidth - 4) annotFloatEl.style.left = Math.max(4, window.innerWidth - w - 4) + 'px';
+    if(ft + h > window.innerHeight - 4) annotFloatEl.style.top = Math.max(4, window.innerHeight - h - 4) + 'px';
+    annotSetupCanvasOne(annotFloatCanvas);
+  });
+  const afRzEnd = () => { afRz = null; };
+  afResize.addEventListener('pointerup', afRzEnd);
+  afResize.addEventListener('pointercancel', afRzEnd);
+}
+
 /* 颜色：先看有没有选中文字，选中就改那段，没选就改默认字色 */
 annotPanel.querySelectorAll('.cdot').forEach(d => {
   d.addEventListener('click', () => {
@@ -10981,16 +11065,17 @@ function annotPtOn(el, e){
     y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height))
   };
 }
-function annotPenWidth(e){
-  // 压感（Pencil 支持时）微调宽度，无压感时用字号换算
-  const base = Math.max(1.4, Math.min(6, annotSize / 5));
+function annotPenWidth(e, el){
+  // 压感（Pencil 支持时）微调宽度，无压感时按笔粗细换算
+  const src = (el === annotFloatCanvas) ? annotPenSize : annotSize;
+  const base = Math.max(1.2, Math.min(9, src / 5));
   if(e && typeof e.pressure === 'number' && e.pressure > 0 && e.pointerType === 'pen'){
     return base * (0.6 + e.pressure * 0.8);
   }
   return base;
 }
 function annotEraseAt(p, el){
-  const r = 14 / Math.max(1, (el || annotCanvasEl).clientWidth);
+  const r = annotEraseSize / Math.max(1, (el || annotCanvasEl).clientWidth);
   let hit = -1;
   for(let i=annotStrokes.length-1;i>=0;i--){
     const pts = annotStrokes[i].pts || [];
@@ -11057,7 +11142,7 @@ function annotBindDraw(el, gate){
     if(annotErase){ annotEraseAt(p, el); return; }
     annotLastSurface = 'draw';
     try{ el.setPointerCapture(e.pointerId); }catch(err){}
-    annotCur = { c: annotColor, w: annotPenWidth(e), pts: [p], _el: el };
+    annotCur = { c: annotColor, w: annotPenWidth(e, el), pts: [p], _el: el };
     annotDrawAll();
   });
   el.addEventListener('pointermove', (e) => {
@@ -11097,8 +11182,8 @@ if(annotFloatCanvas) annotBindDraw(annotFloatCanvas, () => annotFloatOpen());
 function annotFloatPlace(){
   if(annotFloatEl.dataset.pos) return;
   const r = annotPanel.getBoundingClientRect();
-  const w = annotFloatEl.offsetWidth || 300;
-  const h = annotFloatEl.offsetHeight || 210;
+  const w = annotFloatEl.offsetWidth || 320;
+  const h = annotFloatEl.offsetHeight || 240;
   let l = r.right + 10;
   let t = Math.max(8, r.top);
   if(l + w > window.innerWidth - 8){
