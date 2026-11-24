@@ -3399,12 +3399,21 @@ function cloudFetchOnce(method, path, body, extra){
     var headers = { apikey: CLOUD_KEY, Authorization: 'Bearer ' + CLOUD_KEY };
     if(body) headers['Content-Type'] = 'application/json';
     if(extra) for(var k in extra) headers[k] = extra[k];
-    fetch(CLOUD_URL + path, { method: method, headers: headers, body: body || undefined, cache: 'no-store' })
+    // 有的手机网络下 fetch 会一直挂着不返回，给它也加超时，避免登录卡死
+    var ctl = null, timer = null;
+    try{
+      if(typeof AbortController === 'function'){
+        ctl = new AbortController();
+        timer = setTimeout(function(){ try{ ctl.abort(); }catch(e){} }, 11000);
+      }
+    }catch(e){ ctl = null; }
+    fetch(CLOUD_URL + path, { method: method, headers: headers, body: body || undefined, cache: 'no-store', signal: ctl ? ctl.signal : undefined })
       .then(function(r){
         if(r.ok) return r.text();
         return r.text().then(function(t){ throw new Error('HTTP ' + r.status + ' ' + (t || '')); });
       })
-      .then(resolve, reject);
+      .then(function(t){ if(timer) clearTimeout(timer); resolve(t); },
+            function(e){ if(timer) clearTimeout(timer); reject(e); });
   });
 }
 function cloudReqOnce(method, path, body, extra){
@@ -3439,13 +3448,14 @@ function cloudReq(method, path, body, extra, tries){
   });
 }
 
-async function cloudPull(name){
+async function cloudPull(name, tries, keepTomb){
   const key = normName(name) || name;
-  const txt = await cloudReq('GET', '/rest/v1/shiwang_profiles?username=eq.' + encodeURIComponent(key) + '&select=username,payload,updated_at', null, null, 3);
+  const txt = await cloudReq('GET', '/rest/v1/shiwang_profiles?username=eq.' + encodeURIComponent(key) + '&select=username,payload,updated_at', null, null, tries || 3);
   let rows = [];
   try{ rows = JSON.parse(txt || '[]'); }catch(e){ rows = []; }
   const row = (rows && rows[0]) || null;
-  if(row && isRemovedRow(row)) return null;   // 已注销的账号：当作查不到
+  // 已注销的账号：默认当作查不到；登录时要单独提示，所以允许把这行原样带出
+  if(row && !keepTomb && isRemovedRow(row)) return null;
   return row;
 }
 
@@ -3881,8 +3891,8 @@ function mergeData(base, extra){
 }
 
 /* 拉取某个账号的当前记录，并把历史版本里的进度一并合并（取最高） */
-async function pullMerged(name, withHist){
-  const row = await cloudPull(name);
+async function pullMerged(name, withHist, tries){
+  const row = await cloudPull(name, tries, false);
   const full = (row && row.payload) ? parseCloudEnvelope(row.payload) : null;
   const hist = (withHist === false) ? [] : await cloudHistory(name);
   const cands = [];
@@ -4499,6 +4509,7 @@ function openLogin(){
     b.textContent = name;
     b.addEventListener('click', () => {
       $('#loginName').value = name;
+      prefetchLogin(name);       // 点名字就开始下云端档案，等的是输密码的时间
       doLogin();
     });
     chips.appendChild(b);
@@ -4510,121 +4521,194 @@ function openLogin(){
   setTimeout(() => { $('#loginName').focus(); }, 260);
 }
 
+/* ---------- 登录提速：本机已知的先缓存，云端只拉一次、带超时 ---------- */
+const LOGIN_LOCK_KEY = 'sww-login-lock@';   // 上次验证通过的知识锁哈希
+const LOGIN_DEV_KEY  = 'sww-login-dev@';    // 已用安全码验证过的设备
+let loginBusy = false;
+const loginPrefetch = new Map();
+function loginKey(name){ return normName(name) || name || ''; }
+function readTs(key){
+  try{ return JSON.parse(localStorage.getItem(key) || 'null'); }catch(e){ return null; }
+}
+function writeTs(key, val){
+  try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){}
+}
+function lockOkCache(name){
+  const r = readTs(LOGIN_LOCK_KEY + loginKey(name));
+  return (r && r.hash) ? { on:true, hash:r.hash } : null;
+}
+function setLockOkCache(name, hash){ writeTs(LOGIN_LOCK_KEY + loginKey(name), { hash:hash, at:Date.now() }); }
+function devOkOf(name){ const r = readTs(LOGIN_DEV_KEY + loginKey(name)); return !!(r && r.dev === deviceId()); }
+function setDevOk(name){ writeTs(LOGIN_DEV_KEY + loginKey(name), { dev:deviceId(), at:Date.now() }); }
+function prefetchLogin(name){
+  const k = loginKey(name);
+  if(!k) return null;
+  const rec = loginPrefetch.get(k);
+  if(rec && Date.now() - rec.at < 25000) return rec.p;
+  // 登录只试 2 次：宁可先进去、后台再对齐，也不要让按钮干等
+  const p = pullMerged(k, false, 2);
+  p.catch(() => {});
+  loginPrefetch.set(k, { p, at:Date.now() });
+  if(loginPrefetch.size > 5) loginPrefetch.delete(loginPrefetch.keys().next().value);
+  return p;
+}
+function takeLoginPull(name){
+  const k = loginKey(name);
+  const rec = loginPrefetch.get(k);
+  if(rec){ loginPrefetch.delete(k); return rec.p; }
+  return prefetchLogin(k);
+}
+function waitAtMost(p, ms){
+  return new Promise(resolve => {
+    let done = false;
+    const t = setTimeout(() => { if(!done){ done = true; resolve({ __timeout:true }); } }, ms);
+    p.then(v => { if(!done){ done = true; clearTimeout(t); resolve(v); } },
+           () => { if(!done){ done = true; clearTimeout(t); resolve(null); } });
+  });
+}
+
 async function doLogin(){
   const raw = normName($('#loginName').value);
   if(!raw){ toast('先输入一个名字'); $('#loginName').focus(); return; }
+  if(loginBusy) return;
+  loginBusy = true;
 
   const existed = listUsers().map(normName).includes(raw);
   const btn = $('#loginForm .login-go');
+  const oldLabel = btn.textContent;
   btn.disabled = true;
+  btn.textContent = '正在进入…';
 
-  let offline = false;
-
-  // 账号是否已被安全员注销 + 拉云端档案，两件事同时发出去，避免登录时多等一个来回
-  const tombReq = cloudReq('GET', '/rest/v1/shiwang_profiles?username=eq.' + encodeURIComponent(normName(raw) || raw) + '&select=username,payload,updated_at', null, null, 1)
-    .then(txt => { try{ return JSON.parse(txt || '[]'); }catch(e){ return []; } })
-    .catch(() => []);
-
-  let cloudData = null, cloudAt = 0, legacy = false;
+  let cloudData = null, cloudAt = 0, legacy = false, guardPassed = false, cloudOffline = false;
+  let passedHash = '';
   try{
-    const [rows0, pulled] = await Promise.all([tombReq, pullMerged(raw, false)]);
-    if(rows0[0] && isRemovedRow(rows0[0])){
-      btn.disabled = false;
-      toast('「' + raw + '」已被安全员注销，换一个名字吧', 3000);
-      return;
-    }
-    if(pulled.data){ cloudData = pulled.data; cloudAt = pulled.at || 0; }
-    else if(pulled.row && pulled.row.payload) legacy = true;
-    // 用旧名字登录：云端那行是「改名为 X」的指针，直接跟到新名字，不再另开一个号
-    const renamedTo = cloudData ? renameTargetOf(cloudData) : '';
-    if(renamedTo && renamedTo !== raw && renameHop < 3){
-      renameHop++;
-      // 本机用旧名字存过档：并到新名字下，别留一份孤立档案
-      try{
-        const oldLocal = readProfile(raw);
-        const curLocal = readProfile(renamedTo);
-        if(oldLocal){
-          const merged = curLocal ? mergeData(curLocal, oldLocal) : oldLocal;
-          localStorage.setItem(profileKey(renamedTo), JSON.stringify(Object.assign({}, merged, { savedAt: Date.now() })));
-          localStorage.removeItem(profileKey(raw));
-        }
-        const users = listUsers().filter(u => normName(u) !== normName(raw));
-        if(users.indexOf(renamedTo) < 0) users.push(renamedTo);
-        localStorage.setItem(USERS_KEY, JSON.stringify(users));
-        localStorage.setItem(CURRENT_KEY, renamedTo);
-      }catch(e){}
-      $('#loginName').value = renamedTo;
-      btn.disabled = false;
-      toast('「' + raw + '」已改名为「' + renamedTo + '」，正在用新名字登录', 2200);
-      return doLogin();
-    }
-  }catch(e){
-    if(!offline){
-      // 合并失败时退回单条拉取
-      try{
-        const row = await cloudPull(raw);
-        const full = (row && row.payload) ? parseCloudEnvelope(row.payload) : null;
-        if(full){ cloudData = full.data; cloudAt = full.at || 0; }
-      }catch(e2){}
-    }
-  }
-  if(cloudAt) lastCloudSyncAt = cloudAt;
+    // 0) 本机档案先拿到手：有本机档案的用户不必等云端就能进门
+    const localData = readProfile(raw);
+    const localAt = localSavedAt(raw);
+    const localExists = !!localData;
 
-  const localData = readProfile(raw);
-  const localAt = localSavedAt(raw);
-  const localExists = !!localData;
-  // 学习进度与知识库取“更高/更全”的并集，而不是简单覆盖
-  if(cloudData && localData) cloudData = mergeData(cloudData, localData);
+    // 1) 顺手把云端请求发出去，和下面输密码并行（只发一次）
+    const pullP = takeLoginPull(raw);
 
-  // 知识锁：开启后必须先输密码才能进入
-  const lock = (cloudData && cloudData.meta && cloudData.meta.lock && cloudData.meta.lock.on)
-    ? cloudData.meta.lock : lockOf(raw);
-  if(lock && lock.on && lock.hash){
-    const pw = await askPassValue('知识锁', '「' + raw + '」已开启知识锁，请输入密码后进入', false);
-    if(!pw){ btn.disabled = false; toast('已取消登录'); return; }
-    if(await hashPass(pw) !== lock.hash){
-      btn.disabled = false;
-      toast('密码不对，无法进入', 2600);
-      return;
+    // 2) 知识锁：本机记得上次通过的哈希就立刻弹窗，不用先等云端
+    const lockNow = lockOf(raw) || lockOkCache(raw);
+    if(lockNow && lockNow.on && lockNow.hash){
+      const pw = await askPassValue('知识锁', '「' + raw + '」已开启知识锁，请输入密码后进入', false);
+      if(!pw){ toast('已取消登录'); return; }
+      if(await hashPass(pw) !== lockNow.hash){ toast('密码不对，无法进入', 2600); return; }
+      passedHash = lockNow.hash;
+      setLockOkCache(raw, lockNow.hash);
     }
-  }
 
-  // 设备安全码：木泽账号在非本地设备登录需输入安全密码
-  let guardPassed = false;
-  if(raw === GUARD_NAME){
-    const gRec = (cloudData && cloudData.meta && cloudData.meta.devGuard)
-      || (localData && localData.meta && localData.meta.devGuard) || null;
-    const guardOn = gRec ? !!gRec.on : true;   // 没有记录时默认开启
-    const devLocal = deviceIsLocalOf(cloudData) || deviceIsLocalOf(localData);
-    if(guardOn && !devLocal){
-      const code = await askPassValue('设备安全码', '这台设备不是「木泽」的本地设备，输入安全密码才能登录', false);
-      if(!code){ btn.disabled = false; toast('已取消登录'); return; }
-      const ok = (gRec && gRec.hash) ? (await hashPass(code)) === gRec.hash : (code === GUARD_DEFAULT);
-      if(!ok){ btn.disabled = false; toast('安全密码不对，这台设备不能登录', 2600); return; }
-      guardPassed = true;
+    // 3) 等云端：本机已有档案时最多等 5 秒，新设备最多等 8 秒，超时也不许无限干等
+    const waitMs = localData ? 5000 : 8000;
+    let pulled = await waitAtMost(pullP, waitMs);
+    if(!pulled || pulled.__timeout) pulled = null;
+    if(!pulled && !localData){
+      toast('云端响应较慢，正在重试…', 2200);
+      pulled = await waitAtMost(pullP, 9000);
+      if(pulled && pulled.__timeout) pulled = null;
+      if(!pulled){
+        cloudOffline = true;
+        toast('云端暂时连不上，请检查网络后重试', 3000);
+        return;
+      }
     }
-  }
+    if(!pulled) cloudOffline = true;
 
-  enterAccount(raw, cloudData);
+    if(pulled){
+      if(pulled.row && isRemovedRow(pulled.row)){
+        toast('「' + raw + '」已被安全员注销，换一个名字吧', 3000);
+        return;
+      }
+      if(pulled.data){ cloudData = pulled.data; cloudAt = pulled.at || 0; }
+      else if(pulled.row && pulled.row.payload) legacy = true;
+      // 用旧名字登录：云端那行是「改名为 X」的指针，直接跟到新名字，不再另开一个号
+      const renamedTo = cloudData ? renameTargetOf(cloudData) : '';
+      if(renamedTo && renamedTo !== raw && renameHop < 3){
+        renameHop++;
+        // 本机用旧名字存过档：并到新名字下，别留一份孤立档案
+        try{
+          const oldLocal = readProfile(raw);
+          const curLocal = readProfile(renamedTo);
+          if(oldLocal){
+            const merged = curLocal ? mergeData(curLocal, oldLocal) : oldLocal;
+            localStorage.setItem(profileKey(renamedTo), JSON.stringify(Object.assign({}, merged, { savedAt: Date.now() })));
+            localStorage.removeItem(profileKey(raw));
+          }
+          const users = listUsers().filter(u => normName(u) !== normName(raw));
+          if(users.indexOf(renamedTo) < 0) users.push(renamedTo);
+          localStorage.setItem(USERS_KEY, JSON.stringify(users));
+          localStorage.setItem(CURRENT_KEY, renamedTo);
+        }catch(e){}
+        $('#loginName').value = renamedTo;
+        loginBusy = false;
+        toast('「' + raw + '」已改名为「' + renamedTo + '」，正在用新名字登录', 2200);
+        return doLogin();
+      }
+    }
+    if(cloudAt) lastCloudSyncAt = cloudAt;
 
-  if(guardPassed) markThisDeviceLocal();
-  if(cloudData){
-    cloudPush(raw);
-    toast('已合并云端与本机记录（进度取最高）');
-  }else{
-    if(!offline) cloudPush(raw);
-    if(offline){
+    // 4) 云端说的锁和本机记住的不一样（改过密码）→ 按云端再验一次
+    const cloudHash = (cloudData && cloudData.meta && cloudData.meta.lock && cloudData.meta.lock.on)
+      ? (cloudData.meta.lock.hash || '') : '';
+    if(cloudData && cloudData.meta && cloudData.meta.lock && cloudData.meta.lock.on){
+      if(cloudHash && cloudHash !== passedHash){
+        const pw2 = await askPassValue('知识锁', '「' + raw + '」已开启知识锁，请输入密码后进入', false);
+        if(!pw2){ toast('已取消登录'); return; }
+        if(await hashPass(pw2) !== cloudHash){ toast('密码不对，无法进入', 2600); return; }
+        passedHash = cloudHash;
+        setLockOkCache(raw, cloudHash);
+      }
+    }
+
+    // 5) 学习进度与知识库取“更高/更全”的并集，而不是简单覆盖
+    if(cloudData && localData) cloudData = mergeData(cloudData, localData);
+
+    // 6) 设备安全码：木泽账号在非本地设备登录需输入安全密码
+    if(raw === GUARD_NAME){
+      const gRec = (cloudData && cloudData.meta && cloudData.meta.devGuard)
+        || (localData && localData.meta && localData.meta.devGuard) || null;
+      const guardOn = gRec ? !!gRec.on : true;   // 没有记录时默认开启
+      const devLocal = deviceIsLocalOf(cloudData) || deviceIsLocalOf(localData) || devOkOf(raw);
+      if(guardOn && !devLocal){
+        const code = await askPassValue('设备安全码', '这台设备不是「木泽」的本地设备，输入安全密码才能登录', false);
+        if(!code){ toast('已取消登录'); return; }
+        const ok = (gRec && gRec.hash) ? (await hashPass(code)) === gRec.hash : (code === GUARD_DEFAULT);
+        if(!ok){ toast('安全密码不对，这台设备不能登录', 2600); return; }
+        guardPassed = true;
+        setDevOk(raw);
+      }
+    }
+
+    // 7) 进门：有本机档案或云端档案都会有内容；进度由后台对齐补齐
+    enterAccount(raw, cloudData);
+    if(guardPassed) markThisDeviceLocal();
+
+    if(cloudData){
+      cloudPush(raw);
+      toast('已合并云端与本机记录（进度取最高）');
+    }else if(cloudOffline){
       cloudBlocked = true;
       startCloudRetry(raw);
       setSyncLine('云端离线，连上后自动同步');
+      toast('云端暂时连不上，先在本机使用（连上后会自动同步）');
+    }else{
+      cloudPush(raw);
+      toast(legacy ? '已用本机记录接管这个账号'
+        : (existed ? '欢迎回来，' + raw : '已为「' + raw + '」建好云端账号'));
     }
-    toast(offline ? '云端暂时连不上，先在本机使用（连上后会自动同步）'
-      : legacy ? '已用本机记录接管这个账号'
-      : (existed ? '欢迎回来，' + raw : '已为「' + raw + '」建好云端账号'));
+    if(guardPassed) toast('这台设备已记为本地设备，下次直接进入');
+    loginPrefetch.clear();
+  }catch(e){
+    // 任何一步出错都不能把按钮焊死在禁用状态
+    try{ console.warn('login failed', e); }catch(_){}
+    toast('登录出错了，请重试一次', 2600);
+  }finally{
+    loginBusy = false;
+    btn.textContent = oldLabel;
+    btn.disabled = false;
   }
-
-  if(guardPassed) toast('这台设备已记为本地设备，下次直接进入');
-  btn.disabled = false;
 }
 
 /* ---------- 跨设备迁移码（AES-GCM 加密） ---------- */
@@ -10688,6 +10772,18 @@ async function handleImage(file){
 
 /* ================== 启动 ================== */
 $('#loginForm').addEventListener('submit', e => { e.preventDefault(); doLogin(); });
+/* 名字一填好就先下档案：输密码 / 等确认的这段时间正好用来拉云端 */
+let loginTypeTimer = 0;
+$('#loginName').addEventListener('input', () => {
+  clearTimeout(loginTypeTimer);
+  const n = normName($('#loginName').value);
+  if(!n) return;
+  loginTypeTimer = setTimeout(() => {
+    try{
+      if(listUsers().some(u => normName(u) === n)) prefetchLogin(n);
+    }catch(e){}
+  }, 300);
+});
 function closeNebula(){
   const m = $('#nebulaModal');
   m.classList.remove('show');
