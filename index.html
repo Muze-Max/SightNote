@@ -8810,7 +8810,7 @@ function renderChat(){
       box.appendChild(voiceBubble(m));
     }else{
       const el = document.createElement('div');
-      el.className = 'msg' + (m.from === currentUser ? ' me' : '') + (m.share ? ' share' : '');
+      el.className = 'msg' + (msgAckName(m.from) === msgAckName(currentUser) ? ' me' : '') + (m.share ? ' share' : '');
       if(m.share){
         el.innerHTML =
           '<div class="hd">' + (m.share.kind === 'set' ? '知识库' : '记忆库') + ' · 来自 ' + escapeHtml(displayName(m.from)) + '</div>' +
@@ -8943,6 +8943,10 @@ async function msgPull(){
       const sr = (s.sreq || []).find(x => x.to === from);
       if(sr) sr.status = kind === 'accept' ? 'accepted' : 'rejected';
       if(kind === 'accept' && !s.friends.includes(from)){
+        // 只在「我确实向他发过好友申请」或「他先申请过我」时才认这条 accept；
+        // 否则谁发一条 accept 都能凭空把自己塞进我的好友里（这个号根本没加过对方）
+        const iAsked = !!sr || (s.req || []).some(x => x.from === from);
+        if(!iAsked) return;
         s.friends.push(from);
         if(!s.rlog.some(x => x.from === from)) s.rlog.push({ from: from, at: at, status:'accepted' });
         applied++; needSocial = true;
