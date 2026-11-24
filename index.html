@@ -3617,7 +3617,7 @@ async function ensureAccountPassphrase(name, data){
   writeKey = await acctKeyOfPass(np);
   acctKeySet(name, writeKey);
   const m = metaEnsure();
-  m.lock = { on: true, hash: await hashPass(np) };
+  m.lock = { on: true, hash: await hashPass(np), at: Date.now() };
   saveLocal();
   cloudPush(name);
   toast('已设好账号口令，云端写入已受保护');
@@ -3664,7 +3664,7 @@ async function cloudPush(name, data){
         if(fd && !isThinSnapshot(fd)){
           const taken = sessionTakenBy(fd && fd.meta && fd.meta.session);
           if(taken){ loseSession(taken); return false; }
-          incoming = mergeData(fd, snap);
+          incoming = mergeData(fd, snap, { baseAt: (fresh && fresh.at) || 0, extraAt: at });
         }
       }
     }catch(e){}
@@ -3960,7 +3960,49 @@ function dataScore(d){
 function adminNameSafe(){ try{ return (typeof ADMIN_NAME === 'string') ? ADMIN_NAME : ''; }catch(e){ return ''; } }
 function currentNameSafe(){ try{ return currentUser || ''; }catch(e){ return ''; } }
 
-function mergeData(base, extra){
+/* 开关型设置（知识锁 / 设备安全码）在合并时的取舍：
+   · 谁有明确的修改时间就用谁，后改的赢；
+   · 老数据没有时间戳时，任何一方「已关闭」都按关闭算——
+     否则一台旧设备本机残留的「开启」，会把云端已经关闭的设置又复活。 */
+function pickMetaSwitch(a, b, dflt){
+  const at1 = Number(a && a.at) || 0, at2 = Number(b && b.at) || 0;
+  if(at1 || at2){
+    if(at1 === at2) return a || b;
+    return at1 > at2 ? a : b;
+  }
+  if(a && a.on === false) return a;
+  if(b && b.on === false) return b;
+  return a || b || dflt;
+}
+/* 词条合并：同一条词以较新那份的内容为准（改了释义/词性才算改得动），
+   旧份独有的词仍保留，不因为「谁新谁旧」丢词。 */
+/* 词库名历史坏值修复：导入文档时老代码把文件名后面又拼了一遍，
+   合并时统一收敛成一份，避免每个设备都把这个坏名字同步下去 */
+function tidySetName(n){
+  let s = String(n || '').replace(/\s+/g, ' ').trim();
+  const i = s.indexOf('.docx');
+  if(i > 0){
+    const head = s.slice(0, i).trim();
+    const tail = s.slice(i + 5).trim();
+    if(tail && head === tail) s = head;
+    else if(tail && head.endsWith(tail)) s = head.slice(0, head.length - tail.length).trim();
+    else s = head;
+  }
+  const h = s.length / 2;
+  if(s.length > 6 && Number.isInteger(h) && s.slice(0, h) === s.slice(h)) s = s.slice(0, h).trim();
+  return s || '未命名';
+}
+function mergeItems(aList, bList, preferB){
+  const A = Array.isArray(aList) ? aList : [];
+  const B = Array.isArray(bList) ? bList : [];
+  const newer = preferB ? B : A, older = preferB ? A : B;
+  const key = it => ((it && (it.en || it.word || it.name)) || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const map = new Map();
+  newer.forEach(it => { if(it){ const k = key(it); if(k) map.set(k, it); } });
+  older.forEach(it => { if(!it) return; const k = key(it); if(k && !map.has(k)) map.set(k, it); });
+  return Array.from(map.values());
+}
+function mergeData(base, extra, opts){
   const out = JSON.parse(JSON.stringify(base || {}));
   out.customSets = Array.isArray(out.customSets) ? out.customSets : [];
   out.hiddenSets = Array.isArray(out.hiddenSets) ? out.hiddenSets : [];
@@ -4064,25 +4106,26 @@ function mergeData(base, extra){
     if(!had || (Number(v.updatedAt) || 0) >= (Number(had.updatedAt) || 0)) out.annotations[k] = v;
   });
 
+  const preferExtra = !!opts && (Number(opts.extraAt) || 0) > (Number(opts.baseAt) || 0);
+
   (extra.customSets || []).forEach(s => {
     if(!s || !Array.isArray(s.items) || !s.items.length) return;
-    const same = out.customSets.find(x => x.id === s.id) || out.customSets.find(x => x.name === s.name);
-    if(!same) out.customSets.push(JSON.parse(JSON.stringify(s)));
-    else if((same.items || []).length < s.items.length){
-      same.items = JSON.parse(JSON.stringify(s.items));
-      if(s.desc) same.desc = s.desc;
-      if(s.name && !same.name) same.name = s.name;
-    }
+    // 只按 id 认同一套词：以前还按 name 匹配，名字一改就会被当成新的一套，越并越多
+    const same = out.customSets.find(x => x.id === s.id);
+    if(!same){ out.customSets.push(JSON.parse(JSON.stringify(s))); return; }
+    // 较新那份的同名条目说了算（这是「改了释义却看不见」的根因），旧份独有的条目仍然保留
+    same.items = mergeItems(same.items, s.items, preferExtra);
+    if(s.desc && preferExtra) same.desc = s.desc;
+    if(s.name && !same.name) same.name = s.name;
   });
+  out.customSets.forEach(s => { if(s && s.name) s.name = tidySetName(s.name); });
   (extra.hiddenSets || []).forEach(id => { if(!out.hiddenSets.includes(id)) out.hiddenSets.push(id); });
   Object.keys(extra.enabled || {}).forEach(id => { if(extra.enabled[id]) out.enabled[id] = true; });
 
-  const knownKeys = new Set(out.known.map(keyOf));
-  (extra.known || []).forEach(it => { if(it && !knownKeys.has(keyOf(it))){ out.known.push(it); knownKeys.add(keyOf(it)); } });
-  const unknownKeys = new Set(out.unknown.map(keyOf));
-  (extra.unknown || []).forEach(it => { if(it && !unknownKeys.has(keyOf(it))){ out.unknown.push(it); unknownKeys.add(keyOf(it)); } });
+  out.known = mergeItems(out.known, extra.known || [], preferExtra);
+  out.unknown = mergeItems(out.unknown, extra.unknown || [], preferExtra);
 
-  // 记忆库：按 id 合并，同一个库里两边的词条取并集（旧的往返不丢词）
+  // 记忆库：按 id 合并，同一个库里两边词条并集；同词条以较新那份的释义为准
   (extra.libs || []).forEach(l => {
     if(!l || typeof l.id !== 'string' || !l.id || l.id === LIB_MAIN) return;
     const same = out.libs.find(x => x.id === l.id);
@@ -4096,10 +4139,8 @@ function mergeData(base, extra){
       return;
     }
     if(!same.name && l.name) same.name = l.name;
-    const kk = new Set(libClean(same.known).map(keyOf));
-    libClean(l.known).forEach(it => { if(!kk.has(keyOf(it))){ same.known.push(it); kk.add(keyOf(it)); } });
-    const uk = new Set(libClean(same.unknown).map(keyOf));
-    libClean(l.unknown).forEach(it => { if(!uk.has(keyOf(it))){ same.unknown.push(it); uk.add(keyOf(it)); } });
+    same.known = mergeItems(libClean(same.known), libClean(l.known), preferExtra);
+    same.unknown = mergeItems(libClean(same.unknown), libClean(l.unknown), preferExtra);
   });
 
   Object.keys(extra.views || {}).forEach(k => {
@@ -4139,14 +4180,13 @@ function mergeData(base, extra){
     constellation: ma.constellation || mb.constellation || '',
     devices: devices,
     records: records.slice(0, 5),
-    lock: (ma.lock && ma.lock.on) ? ma.lock : (mb.lock || { on:false, hash:'' }),
+    lock: pickMetaSwitch(ma.lock, mb.lock, { on:false, hash:'' }),
     // 突触码、注册时间、管理员备注都要留住，别在合并时丢掉
     synapse: ma.synapse || mb.synapse || '',
     joinedAt: (j1 && j2) ? Math.min(j1, j2) : (j1 || j2),
     adminNotes: notes,
-    // 安全码：谁有哈希留谁，两边都有就留云端那份，避免合并把它抹掉
-    devGuard: (ma.devGuard && ma.devGuard.hash) ? ma.devGuard
-      : ((mb.devGuard && mb.devGuard.hash) ? mb.devGuard : (ma.devGuard || mb.devGuard || null)),
+    // 安全码：同样按「后改的赢、关闭优先」取舍，避免旧设备把改过的安全码又盖回去
+    devGuard: pickMetaSwitch(ma.devGuard, mb.devGuard, null),
     // 在线会话：取时间更新的那次登录
     session: ((Number(ma.session && ma.session.at) || 0) >= (Number(mb.session && mb.session.at) || 0))
       ? (ma.session || mb.session || null) : (mb.session || null)
@@ -4160,19 +4200,24 @@ async function pullMerged(name, withHist, tries){
   const full = (row && row.payload) ? parseCloudEnvelope(row.payload) : null;
   const hist = (withHist === false) ? [] : await cloudHistory(name);
   const cands = [];
-  if(full && full.data) cands.push(full.data);
-  hist.forEach(h => { if(h.data) cands.push(h.data); });
+  if(full && full.data) cands.push({ d: full.data, at: full.at || 0 });
+  hist.forEach(h => { if(h.data) cands.push({ d: h.data, at: h.at || 0 }); });
   let data = null;
   if(cands.length){
-    // 以“使用频率最高的那台设备”留下的记录为基准，其余记录只做补全
+    // 以“使用频率最高的那台设备”留下的记录为基准，其余记录按时间先后补进来（新的覆盖旧的）
     let base = cands[0], best = -1;
-    cands.forEach(d => {
-      const ds = (d.meta && Array.isArray(d.meta.devices)) ? d.meta.devices : [];
+    cands.forEach(c => {
+      const ds = (c.d.meta && Array.isArray(c.d.meta.devices)) ? c.d.meta.devices : [];
       const f = ds.reduce((m,x) => Math.max(m, x.freq || 0), 0);
-      if(f > best){ best = f; base = d; }
+      if(f > best){ best = f; base = c; }
     });
-    data = base;
-    cands.forEach(d => { if(d !== base) data = mergeData(data, d); });
+    data = base.d;
+    let curAt = base.at;
+    cands.slice().sort((a,b) => a.at - b.at).forEach(c => {
+      if(c === base) return;
+      data = mergeData(data, c.d, { baseAt: curAt, extraAt: c.at });
+      curAt = Math.max(curAt, c.at);
+    });
   }
   return { data, at: Math.max(full ? full.at : 0, hist.length ? hist[0].at : 0), row };
 }
@@ -4325,7 +4370,7 @@ async function reconcileNow(name, opts){
     return true;
   }
 
-  const merged = local ? mergeData(cloud, local) : cloud;
+  const merged = local ? mergeData(cloud, local, { baseAt: (pulled && pulled.at) || 0, extraAt: localSavedAt(name) || 0 }) : cloud;
   const cloudPrint = richPrint(cloud), localPrint = richPrint(local), mergedPrint = richPrint(merged);
   let changed = false;
 
@@ -4490,6 +4535,13 @@ function sha256Hex(str){
 async function hashPass(pw, salt){
   return sha256Hex((salt || 'sww-lock:') + pw);
 }
+/* 弹窗关闭动画结束后再隐藏；如果这期间又被重新打开（已经带 show），就不隐藏——
+   否则连续的两次弹窗会互相盖掉，界面看着像「点了没反应」。 */
+function hideLater(el){
+  if(!el) return;
+  setTimeout(() => { if(!el.classList.contains('show')) el.classList.add('hidden'); }, 220);
+}
+
 let lockResolve = null;
 let lockHideTimer = null;
 function askPassValue(title, tip, withConfirm){
@@ -5017,8 +5069,15 @@ async function doLogin(){
     // 1) 顺手把云端请求发出去，和下面输密码并行（只发一次）
     const pullP = takeLoginPull(raw);
 
-    // 2) 知识锁：本机记得上次通过的哈希就立刻弹窗，不用先等云端
-    const lockNow = lockOf(raw) || lockOkCache(raw);
+    // 2) 知识锁：本机有锁时，先花最多 1.2 秒确认云端这一版是否还开着，
+    //    否则本机残留的旧「开启」会拦人——用户已经在别的设备关掉锁，这里还在弹。
+    let lockNow = lockOf(raw) || lockOkCache(raw);
+    if(lockNow && lockNow.on && lockNow.hash){
+      const early = await waitAtMost(pullP, 1200);
+      const cd = (early && !early.__timeout) ? early.data : null;
+      const cl = cd && cd.meta ? cd.meta.lock : null;
+      if(cl) lockNow = cl;              // 云端有明确设置就以云端为准
+    }
     if(lockNow && lockNow.on && lockNow.hash){
       const pw = await askPassValue('知识锁', '「' + raw + '」已开启知识锁，请输入密码后进入', false);
       if(!pw){ toast('已取消登录'); return; }
@@ -5102,7 +5161,7 @@ async function doLogin(){
     }
 
     // 5) 学习进度与知识库取“更高/更全”的并集，而不是简单覆盖
-    if(cloudData && localData) cloudData = mergeData(cloudData, localData);
+    if(cloudData && localData) cloudData = mergeData(cloudData, localData, { baseAt: cloudAt || 0, extraAt: localAt || 0 });
 
     // 6) 设备安全码：木泽账号在非本地设备登录需输入安全密码
     if(raw === GUARD_NAME){
@@ -5141,7 +5200,7 @@ async function doLogin(){
           }
         }
         const nowLocal = readProfile(raw);
-        applySaved(nowLocal ? mergeData(cloudData, nowLocal) : cloudData);
+        applySaved(nowLocal ? mergeData(cloudData, nowLocal, { baseAt: cloudAt || 0, extraAt: localAt || 0 }) : cloudData);
         saveLocal();
         renderMenu();
       }
@@ -5270,7 +5329,7 @@ function openTransfer(){
 }
 function closeTransfer(){
   transferModal.classList.remove('show');
-  setTimeout(() => transferModal.classList.add('hidden'), 220);
+  hideLater(transferModal);
 }
 function ttab(t){
   $$('.tt-tab').forEach(b => b.classList.toggle('on', b.dataset.ttab === t));
@@ -5517,7 +5576,7 @@ function openEffectModal(){
 }
 function closeEffectModal(){
   effectModal.classList.remove('show');
-  setTimeout(() => effectModal.classList.add('hidden'), 220);
+  hideLater(effectModal);
 }
 if($('#openEffect')) $('#openEffect').addEventListener('click', openEffectModal);
 if($('#closeEffect')) $('#closeEffect').addEventListener('click', closeEffectModal);
@@ -5566,7 +5625,7 @@ function openNetModal(){
 }
 function closeNetModal(){
   netModal.classList.remove('show');
-  setTimeout(() => netModal.classList.add('hidden'), 220);
+  hideLater(netModal);
 }
 if($('#netBtn')) $('#netBtn').addEventListener('click', openNetModal);
 if($('#closeNet')) $('#closeNet').addEventListener('click', closeNetModal);
@@ -5801,7 +5860,7 @@ if($('#transitRestore')) $('#transitRestore').addEventListener('click', () => {
 });
 function closeTransit(){
   transitModal.classList.remove('show');
-  setTimeout(() => transitModal.classList.add('hidden'), 220);
+  hideLater(transitModal);
 }
 if($('#openTransit')) $('#openTransit').addEventListener('click', openTransit);
 if($('#closeTransit')) $('#closeTransit').addEventListener('click', closeTransit);
@@ -6257,7 +6316,7 @@ function openGroupModal(){
 }
 function closeGroupModal(){
   groupModal.classList.remove('show');
-  setTimeout(() => groupModal.classList.add('hidden'), 220);
+  hideLater(groupModal);
 }
 
 async function createGroup(){
@@ -6686,7 +6745,7 @@ function openDelFriend(){
 function closeDelFriend(){
   delFriendModal.classList.remove('show');
   delFriendTarget = '';
-  setTimeout(() => delFriendModal.classList.add('hidden'), 220);
+  hideLater(delFriendModal);
 }
 async function deleteFriend(name){
   if(!name) return;
@@ -6743,7 +6802,7 @@ function openRemark(name){
 function closeRemark(){
   remarkModal.classList.remove('show');
   remarkTarget = '';
-  setTimeout(() => remarkModal.classList.add('hidden'), 220);
+  hideLater(remarkModal);
 }
 function saveRemarkForm(){
   if(!remarkTarget) return;
@@ -6777,7 +6836,7 @@ function openRename(){
 }
 function closeRename(){
   renameModal.classList.remove('show');
-  setTimeout(() => renameModal.classList.add('hidden'), 220);
+  hideLater(renameModal);
 }
 async function doRename(){
   const nu = normName($('#renameInput').value);
@@ -6976,7 +7035,7 @@ function openAdminNote(name){
 function closeAdminNote(){
   adminNoteModal.classList.remove('show');
   adminNoteTarget = '';
-  setTimeout(() => adminNoteModal.classList.add('hidden'), 220);
+  hideLater(adminNoteModal);
 }
 function saveAdminNote(){
   if(!adminNoteTarget) return;
@@ -7329,7 +7388,7 @@ function askAdminPass(){
 }
 function closeAdminPass(ok){
   const m = $('#adminPassModal');
-  if(m){ m.classList.remove('show'); setTimeout(() => m.classList.add('hidden'), 220); }
+  if(m){ m.classList.remove('show'); hideLater(m); }
   const w = adminPassWaiter;
   adminPassWaiter = null;
   if(w) w(!!ok);
@@ -7382,7 +7441,7 @@ async function openAdmin(){
 }
 function closeAdmin(){
   adminModal.classList.remove('show');
-  setTimeout(() => adminModal.classList.add('hidden'), 220);
+  hideLater(adminModal);
 }
 if($('#openAdmin')) $('#openAdmin').addEventListener('click', openAdmin);
 if($('#closeAdmin')) $('#closeAdmin').addEventListener('click', closeAdmin);
@@ -7785,7 +7844,7 @@ function closeBcast(){
   const m = $('#bcastModal');
   if(!m) return;
   m.classList.remove('show');
-  setTimeout(() => m.classList.add('hidden'), 220);
+  hideLater(m);
 }
 async function sendBcast(){
   const btn = $('#bcastSend');
@@ -7941,7 +8000,7 @@ function openGuide(skipCustom){
 function closeGuide(){
   if(!guideModal) return;
   guideModal.classList.remove('show');
-  setTimeout(() => guideModal.classList.add('hidden'), 220);
+  hideLater(guideModal);
 }
 if($('#openGuide')) $('#openGuide').addEventListener('click', () => openGuide());
 if($('#closeGuide')) $('#closeGuide').addEventListener('click', closeGuide);
@@ -8656,7 +8715,7 @@ function openSharePick(kind){
 }
 function closeSharePick(){
   sharePickModal.classList.remove('show');
-  setTimeout(() => sharePickModal.classList.add('hidden'), 220);
+  hideLater(sharePickModal);
 }
 
 function sendShare(share){
@@ -9127,7 +9186,7 @@ function openItemModal(index){
 function closeItemModal(){
   itemModal.classList.remove('show');
   editingIndex = -1;
-  setTimeout(() => itemModal.classList.add('hidden'), 220);
+  hideLater(itemModal);
 }
 
 function saveItemForm(){
@@ -9183,7 +9242,7 @@ function openMoveModal(indexOrList){
 function closeMoveModal(){
   moveModal.classList.remove('show');
   movingIdxs = [];
-  setTimeout(() => moveModal.classList.add('hidden'), 220);
+  hideLater(moveModal);
 }
 
 $('#setBack').addEventListener('click', () => { renderMenu(); showView($('#viewMenu')); });
@@ -9239,7 +9298,7 @@ function fillParentSelect(sel, excludeId, topLabel){
   });
 }
 function showModal(m){ m.classList.remove('hidden'); requestAnimationFrame(() => m.classList.add('show')); }
-function hideModal(m){ m.classList.remove('show'); setTimeout(() => m.classList.add('hidden'), 220); }
+function hideModal(m){ m.classList.remove('show'); hideLater(m); }
 
 function openNewSetModal(){
   fillParentSelect($('#nsParent'), '', '顶层（和现在一样并列）');
@@ -10443,7 +10502,7 @@ function openQuickEdit(item){
 function closeQuickEdit(){
   quickModal.classList.remove('show');
   quickTarget = null;
-  setTimeout(() => quickModal.classList.add('hidden'), 220);
+  hideLater(quickModal);
 }
 function saveQuickEdit(){
   if(!quickTarget) return;
@@ -10860,7 +10919,7 @@ function openLibModal(mode, id){
 
 function closeLibModal(){
   libModalEl.classList.remove('show');
-  setTimeout(() => libModalEl.classList.add('hidden'), 220);
+  hideLater(libModalEl);
 }
 
 if($('#newLib')) $('#newLib').addEventListener('click', () => openLibModal('create'));
@@ -10948,7 +11007,7 @@ function openImport(){
 }
 function closeImport(){
   modal.classList.remove('show');
-  setTimeout(() => modal.classList.add('hidden'), 220);
+  hideLater(modal);
 }
 $('#openImport').addEventListener('click', openImport);
 $('#closeImport').addEventListener('click', closeImport);
@@ -11409,7 +11468,7 @@ $('#lockSwitch').addEventListener('click', async () => {
   if(!m.lock.on){
     const pw = await askPassValue('开启知识锁', '给「' + currentUser + '」设一个登录密码，之后每次登录都要输入', true);
     if(!pw) return;
-    m.lock = { on:true, hash: await hashPass(pw) };
+    m.lock = { on:true, hash: await hashPass(pw), at: Date.now() };
     writeKey = await acctKeyOfPass(pw);
     acctKeySet(currentUser, writeKey);
     toast('知识锁已开启，云端写入已绑定这个口令');
@@ -11417,8 +11476,7 @@ $('#lockSwitch').addEventListener('click', async () => {
     const pw = await askPassValue('关闭知识锁', '输入当前密码后关闭，关闭后登录不再需要密码', false);
     if(!pw) return;
     if(await hashPass(pw) !== m.lock.hash){ toast('密码不对，知识锁仍然开启'); return; }
-    m.lock.on = false;
-    m.lock.hash = '';
+    m.lock = { on:false, hash:'', at: Date.now() };
     toast('知识锁已关闭');
   }
   saveLocal();
@@ -11433,13 +11491,13 @@ if($('#guardSwitch')) $('#guardSwitch').addEventListener('click', async () => {
   if(!m.devGuard || !m.devGuard.on){
     const code = await askPassValue('开启设备安全码', '设一个 6 位以上的安全码，其他设备登录「木泽」时要输入它', true);
     if(!code || code.length < 6){ toast('至少 6 位，未开启'); return; }
-    m.devGuard = { on:true, hash: await hashPass(code) };
+    m.devGuard = { on:true, hash: await hashPass(code), at: Date.now() };
     toast('设备安全码已开启：其他设备登录要输入安全密码');
   }else{
     const code = await askPassValue('关闭设备安全码', '输入当前安全密码后关闭，关闭后任何设备都能直接登录', false);
     if(!code) return;
     if((await hashPass(code)) !== m.devGuard.hash){ toast('安全密码不对，仍然开启'); return; }
-    m.devGuard.on = false;
+    m.devGuard = { on:false, hash:'', at: Date.now() };
     toast('设备安全码已关闭');
   }
   saveLocal();
@@ -11452,7 +11510,7 @@ if($('#guardEdit')) $('#guardEdit').addEventListener('click', async () => {
   if(!m.devGuard || !m.devGuard.on){ toast('先打开设备安全码'); return; }
   const code = await askPassValue('修改安全密码', '给「木泽」设一个新的安全密码，至少 4 位', true);
   if(!code) return;
-  m.devGuard.hash = await hashPass(code);
+  m.devGuard = Object.assign({}, m.devGuard, { hash: await hashPass(code), at: Date.now() });
   saveLocal();
   cloudPush(currentUser);
   toast('安全密码已更新');
