@@ -4918,6 +4918,7 @@ function startBgSync(){
 
 /* ---------- 登录 / 切换 ---------- */
 function openLogin(){
+  cloudBlocked = false;
   const users = listUsers();
   const chips = $('#userChips');
   chips.innerHTML = '';
@@ -5021,9 +5022,19 @@ async function doLogin(){
       knownPass = pw;
     }
 
-    // 3) 等云端：本机已有档案时最多等 5 秒，新设备最多等 8 秒，超时也不许无限干等
-    const waitMs = localData ? 5000 : 8000;
-    let pulled = await waitAtMost(pullP, waitMs);
+    // 3) 有本机档案 → 立刻进门，云端放到后台对齐；以前在这里干等 5 秒是最主要的一段卡顿
+    let entryDone = false;
+    if(localData){
+      writeKey = knownPass ? await acctKeyOfPass(knownPass) : (acctKeyGet(raw) || '');
+      if(knownPass) acctKeySet(raw, writeKey);
+      cloudBlocked = true;      // 对齐完成前不许回写，绝不用旧的本机内容盖掉云端新内容
+      enterAccount(raw, null);
+      entryDone = true;
+      loginBusy = false;
+      btn.textContent = oldLabel;
+      btn.disabled = false;
+    }
+    let pulled = await waitAtMost(pullP, entryDone ? 6000 : 8000);
     if(!pulled || pulled.__timeout) pulled = null;
     if(!pulled && !localData){
       toast('云端响应较慢，正在重试…', 2200);
@@ -5102,7 +5113,39 @@ async function doLogin(){
       }
     }
 
-    // 7) 进门：有本机档案或云端档案都会有内容；进度由后台对齐补齐
+    // 7) 进门：已经秒进的就不再进一次，只把云端合并结果补到本机
+    if(entryDone){
+      if(cloudData){
+        // 秒进用的是本机记住的锁，云端若已被改过就必须重验，不能拿旧密码混过去
+        const cloudHash2 = (cloudData.meta && cloudData.meta.lock && cloudData.meta.lock.on) ? (cloudData.meta.lock.hash || '') : '';
+        if(cloudHash2 && cloudHash2 !== passedHash){
+          cloudBlocked = true;
+          toast('云端密码在别处改过了，请重新登录验证', 3200);
+          openLogin();
+          return;
+        }
+        if(raw === GUARD_NAME){
+          const gRec2 = (cloudData.meta && cloudData.meta.devGuard) || (localData.meta && localData.meta.devGuard) || null;
+          const devLocal2 = deviceIsLocalOf(cloudData) || deviceIsLocalOf(localData) || devOkOf(raw);
+          if(gRec2 && gRec2.on && gRec2.hash && !devLocal2){
+            cloudBlocked = true;
+            toast('这台设备不是「木泽」的本地设备，请重新登录验证安全码', 3200);
+            openLogin();
+            return;
+          }
+        }
+        const nowLocal = readProfile(raw);
+        applySaved(nowLocal ? mergeData(cloudData, nowLocal) : cloudData);
+        saveLocal();
+        renderMenu();
+      }
+      cloudBlocked = false;
+      if(guardPassed) markThisDeviceLocal();
+      cloudPush(raw);
+      if(cloudData) toast('已与云端对齐，' + raw + ' 欢迎回来', 2400);
+      loginPrefetch.clear();
+      return;
+    }
     writeKey = knownPass ? await acctKeyOfPass(knownPass) : (acctKeyGet(raw) || '');
     if(knownPass) acctKeySet(raw, writeKey);
     enterAccount(raw, cloudData);
