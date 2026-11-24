@@ -8567,7 +8567,7 @@ async function msgPull(){
     const from = r.from_user, kind = r.kind, b = r.body || {};
     const mid = 'm' + r.id;
     if(kind === 'req'){
-      if(!s.req.some(x => x.from === from)){ s.req.push({ from: from, at: Number(b.at) || at }); applied++; needSocial = true; }
+      if(!s.req.some(x => x.from === from)){ s.req.push({ from: from, at: Number(b.at) || at }); applied++; needSocial = true; toast('「' + from + '」想加你为好友，去视窗里接受', 3000); }
       return;
     }
     if(kind === 'accept' || kind === 'reject'){
