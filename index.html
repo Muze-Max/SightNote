@@ -5347,7 +5347,11 @@ async function doLogin(){
     // 4) 新账号注册准许：云端没有这个号、本机也没存过，就得先被「地球村」准许
     if(!localData && !existed && !(pulled && pulled.row) && !legacy && raw !== ADMIN_NAME){
       const allow = await regLoad(true);
-      if(!allow || allow.indexOf(normName(raw)) < 0){
+      if(allow === null){
+        toast('注册准许名单暂时读不到，请稍后重试', 3200);
+        return;
+      }
+      if(allow.indexOf(normName(raw)) < 0){
         toast('「' + raw + '」还没有被准许注册，请找管理员在 视窗 → 管理员 → 地球村 里加上这个用户名', 4200);
         return;
       }
