@@ -5373,13 +5373,12 @@ async function doLogin(){
         knownPass = pw1;
       }
 
-      // ② 账号口令：存在本账号的 meta.acct2 里；第一次登录时在这里设一次
-      let acct2 = (cloudData && cloudData.meta && cloudData.meta.acct2)
+      // ② 账号口令：单独存一条云端行「#账号口令#」，不跟着档案同步走，
+      //    免得别的设备推一份不含它的旧档案把这道密码冲掉
+      let acct2 = null;
+      try{ acct2 = await acct2Pull(); }catch(e){ acct2 = null; }
+      if(!acct2) acct2 = (cloudData && cloudData.meta && cloudData.meta.acct2)
         || (localData && localData.meta && localData.meta.acct2) || null;
-      const setAcct2 = (rec) => {
-        if(cloudData){ cloudData.meta = cloudData.meta || {}; cloudData.meta.acct2 = rec; }
-        if(localData){ localData.meta = localData.meta || {}; localData.meta.acct2 = rec; }
-      };
       if(acct2 && acct2.on && acct2.hash){
         const pw2 = await askPassValue('第 2 道 · 账号口令', '输入「木泽」的账号口令', false);
         if(!pw2){ bail('已取消登录'); return; }
@@ -5389,7 +5388,7 @@ async function doLogin(){
         if(!np){ bail('已取消登录'); return; }
         if(np.length < 4){ bail('账号口令至少 4 位', 2400); return; }
         acct2 = { on:true, hash: await hashPass(np), at: Date.now() };
-        setAcct2(acct2);
+        try{ await acct2Push(acct2); }catch(e){ bail('账号口令写入云端失败，稍后重试', 2800); return; }
         toast('第 2 道账号口令已设好，云端会记住它');
       }
 
@@ -5407,9 +5406,9 @@ async function doLogin(){
       }else if(!cloudData){
         bail('云端连不上，安全员口令校验不了，稍后重试', 3000); return;
       }else{
-        const np3 = await askPassValue('第 3 道 · 安全员口令', '云端还没有安全员口令：现在设一条，至少 8 位', true);
+        const np3 = await askPassValue('第 3 道 · 安全员口令', '云端还没有安全员口令：现在设一条，至少 4 位', true);
         if(!np3){ bail('已取消登录'); return; }
-        if(np3.length < 8){ bail('安全员口令至少 8 位', 2400); return; }
+        if(np3.length < 4){ bail('安全员口令至少 4 位', 2400); return; }
         try{
           sysKeySet(await acctKeyOfPass(np3), sysKey);
           await passPush(np3);
@@ -7585,6 +7584,29 @@ async function passPush(pw){
     JSON.stringify([{ username:PASS_ROW, payload, updated_at:new Date().toISOString() }]),
     { Prefer: 'resolution=merge-duplicates,return=minimal' }, 2);
 }
+/* ---------- 第二道登录密码（账号口令）：单独一条云端行，不跟档案一起同步 ---------- */
+const ACCT2_ROW = '#账号口令#';
+const ACCT2_KEY = '25cf544f2aea75979645fce3f4d208b78d5c935e7e3ac23c09ae128af41fd553';
+async function acct2Pull(){
+  const txt = await cloudReq('GET', '/rest/v1/shiwang_profiles?username=eq.' + encodeURIComponent(ACCT2_ROW) + '&select=username,payload,updated_at', null, null, 2);
+  const rows = JSON.parse(txt || '[]');
+  const row = rows && rows[0];
+  if(!row || !row.payload) return null;
+  let raw = row.payload;
+  if(raw.indexOf(CLOUD_GZ) === 0){
+    try{ raw = await decodePayload(raw); }catch(e){ return null; }
+  }
+  if(raw.indexOf(CLOUD_PLAIN) !== 0) return null;
+  const env = JSON.parse(raw.slice(CLOUD_PLAIN.length));
+  const d = env && env.data;
+  return (d && d.hash) ? { on:true, hash:d.hash, at:d.at || 0 } : null;
+}
+async function acct2Push(rec){
+  const body = CLOUD_PLAIN + JSON.stringify({ v:1, at: rec.at || Date.now(), data: { hash: rec.hash, at: rec.at || Date.now() } });
+  await cloudReq('POST', '/rest/v1/rpc/sww_save_row',
+    JSON.stringify({ p_user: ACCT2_ROW, p_key: ACCT2_KEY, p_old: '', p_payload: body, p_updated: new Date().toISOString() }),
+    { Prefer: 'return=minimal' }, 2);
+}
 function askAdminPass(){
   if(adminPassWaiter) return Promise.resolve(false);
   return new Promise(res => {
@@ -7615,7 +7637,7 @@ async function submitAdminPass(){
     const rec = await passPull();
     const h = await hashPass(pw), alt = fnvPass(pw);
     if(!rec){
-      if(pw.length < 8){ btn.disabled = false; msg.textContent = '首次设置安全员口令：至少 8 位，别用生日或连号'; return; }
+      if(pw.length < 4){ btn.disabled = false; msg.textContent = '首次设置安全员口令：至少 4 位，别用生日或连号'; return; }
       sysKeySet(await acctKeyOfPass(pw), sysKey);
       try{ await passPush(pw); }catch(e){ btn.disabled = false; msg.textContent = '云端写入失败，稍后再试'; return; }
     }else{
@@ -7664,8 +7686,8 @@ if($('#adminRefresh')) $('#adminRefresh').addEventListener('click', () => adminL
 /* 轮换安全员口令：云端哈希、系统行写入凭据一起换，旧口令立即失效 */
 async function changeAdminPass(){
   if(!adminArmed()){ toast('请先通过安全员口令校验'); return; }
-  const np = await askPassValue('改安全员口令', '设一个新的安全员口令（至少 8 位）。改完后广播、讲解、删除用户都用新口令，旧口令立刻失效', true);
-  if(!np || np.length < 8){ toast('至少 8 位，未修改'); return; }
+  const np = await askPassValue('改安全员口令', '设一个新的安全员口令（至少 4 位）。改完后广播、讲解、删除用户都用新口令，旧口令立刻失效', true);
+  if(!np || np.length < 4){ toast('至少 4 位，未修改'); return; }
   try{
     const oldKey = sysKey;
     sysKeySet(await acctKeyOfPass(np), oldKey);
