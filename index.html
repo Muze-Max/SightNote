@@ -3400,7 +3400,14 @@ function applySaved(obj){
       : { on:false, hash:'' },
     synapse: typeof m.synapse === 'string' ? m.synapse : '',
     joinedAt: Number(m.joinedAt) || 0,
-    adminNotes: (m.adminNotes && typeof m.adminNotes === 'object') ? m.adminNotes : {}
+    adminNotes: (m.adminNotes && typeof m.adminNotes === 'object') ? m.adminNotes : {},
+    // 设备安全码与在线会话必须跟着档案走，以前在这里被丢掉，导致每次云端合并后安全码失效
+    devGuard: (m.devGuard && typeof m.devGuard === 'object')
+      ? { on: !!m.devGuard.on, hash: typeof m.devGuard.hash === 'string' ? m.devGuard.hash : '' }
+      : null,
+    session: (m.session && typeof m.session === 'object' && m.session.dev)
+      ? { dev: String(m.session.dev), label: String(m.session.label || ''), at: Number(m.session.at) || 0 }
+      : null
   };
   libEnsure();
 }
@@ -3471,7 +3478,7 @@ function saveLocal(){
 
 function save(){
   saveLocal();
-  if(currentUser && !cloudBlocked){
+  if(currentUser && !cloudBlocked && !sessionLost){
     clearTimeout(cloudTimer);
     const name = currentUser;
     cloudTimer = setTimeout(() => cloudPush(name), 1200);
@@ -3555,6 +3562,7 @@ function cloudReq(method, path, body, extra, tries){
    凭据 = SHA256('sww-acct:' + 账号口令)，和公开的 meta.lock.hash 用的是不同盐，不能互相推导。 */
 const ACCT_KEY_KEY = 'sww-acct@';
 const ACCT_OLD_KEY = 'sww-acct-old@';
+const ONLINE_ROW = '#在线#';   // 每个账号一条极小的「当前在线设备」记录
 const SYS_ADMIN_ROWS = ['#口令#', '#传信#', '#讲解#'];
 let sysKey = '';
 try{ sysKey = localStorage.getItem('sww-syskey') || ''; }catch(e){}
@@ -3582,6 +3590,7 @@ function acctKeyOfPass(pw){
 /* 一行云端记录该用谁的凭据：管理员系统行用管理员凭据，历史槽位跟本人，其余按账号 */
 function rowOwner(name){
   const key = normName(name) || name;
+  if(key.indexOf(ONLINE_ROW) === 0) return key.slice(ONLINE_ROW.length);
   const m = key.match(/^(.+)#H\d+$/);
   return m ? m[1] : key;
 }
@@ -3631,9 +3640,13 @@ async function cloudPull(name, tries, keepTomb){
 
 /* 内存里最近一次下载/上传的云端副本，用来给「保存前备份旧版本」省钱省流量 */
 var pullCache = {};
+/* 每个账号最近一次成功推上云端的内容指纹：内容没变就不重复上传。
+   这张表以前漏了声明，cloudPush 一进来就 ReferenceError，导致所有账号都推不上云端。 */
+var pushPrints = {};
 
 async function cloudPush(name, data){
   if(!name) return false;
+  if(sessionLost) return false;
   const key = normName(name) || name;
   const snap = data || ttSnapshot();
   // 内容指纹没变就不再推整份档案：省流量、省额度，也不制造无意义的历史版本
@@ -3641,6 +3654,20 @@ async function cloudPush(name, data){
   if(!data && pushPrints[key] === print){ lastCloudSyncAt = Date.now(); return true; }
   try{
     const at = Date.now();
+    // 覆盖前先看一眼云端有没有我们没见过的版本：有就先并进来，绝不拿旧内容盲写
+    let incoming = snap;
+    try{
+      const peek = await cloudPeek(key);
+      if(peek && peek.updated_at && cloudChangedSince(peek.updated_at, key)){
+        const fresh = await cloudPull(key);
+        const fd = fresh && fresh.payload ? parseCloudPayload(fresh.payload) : null;
+        if(fd && !isThinSnapshot(fd)){
+          const taken = sessionTakenBy(fd && fd.meta && fd.meta.session);
+          if(taken){ loseSession(taken); return false; }
+          incoming = mergeData(fd, snap);
+        }
+      }
+    }catch(e){}
     // 覆盖前的「旧版本备份」优先用内存里刚下载过的副本，避免每次保存都再下一遍整份档案
     let oldPayload = '';
     const cached = pullCache[key];
@@ -3655,33 +3682,56 @@ async function cloudPush(name, data){
     const oldFull = oldPayload ? parseCloudEnvelope(oldPayload) : null;
     if(oldFull && oldFull.data && !isThinSnapshot(oldFull.data)){
       // 云端已有内容时，不允许用空数据覆盖
-      if(isThinSnapshot(snap)) return false;
+      if(isThinSnapshot(incoming)) return false;
       // 每 90 秒最多留一个回退点：本机备份 + 云端环形历史各一份
       if(Date.now() - lastHistAt > 90000){
         try{ localStorage.setItem(BAK_KEY + key, JSON.stringify({ at: oldFull.at || Date.now(), payload: oldPayload })); }catch(e){}
         saveHistory(key, oldFull.at || Date.now(), oldPayload);
       }
     }
-    const payload = CLOUD_PLAIN + JSON.stringify({ v:1, name:key, at, data:snap });
+    const payload = CLOUD_PLAIN + JSON.stringify({ v:1, name:key, at, data:incoming });
     const body = await encodePayloadText(payload);
     const stamp = new Date(at).toISOString();
     await cloudReq('POST', '/rest/v1/shiwang_profiles',
       JSON.stringify([{ username: key, payload: body, updated_at: stamp }]),
       { Prefer: 'resolution=merge-duplicates,return=minimal' }, 2);
-    pushPrints[key] = print;
+    pushPrints[key] = richPrint(incoming);
     pullCache[key] = { payload: payload, when: Date.now() };
     cloudAtSet(key, stamp);
     lastCloudSyncAt = at;
+    cloudFailAt = 0;
     return true;
   }catch(e){
+    cloudFailAt = Date.now();
     if(String((e && e.message) || e).indexOf('BAD_KEY') >= 0){
-      // 口令在别的设备上改过：本机缓存的写入凭据已经失效
+      // 本机没有凭据（刷新后没重新登录），或口令在别的设备改过：把凭据找回来再重试
       writeKey = '';
       acctKeySet(key, '');
-      toast('本机缓存的账号凭据已失效，请重新登录并输入口令', 3200);
+      setSyncLine('云端同步暂停：需要账号口令');
+      setTimeout(() => { try{ ensureWriteKey(); }catch(_){} }, 300);
+    }else{
+      setSyncLine('云端写入失败，稍后自动重试');
+      schedulePushRetry(key);
     }
     return false;
   }
+}
+
+/* 写入失败不能就这么算了：本机内容还在，隔一会儿再推一次，直到成功 */
+let cloudFailAt = 0;
+let pushRetryTimer = null;
+function schedulePushRetry(name){
+  if(pushRetryTimer || sessionLost) return;
+  let n = 0;
+  pushRetryTimer = setInterval(async () => {
+    n++;
+    if(sessionLost || !currentUser || n > 20){ clearInterval(pushRetryTimer); pushRetryTimer = null; return; }
+    const ok = await cloudPush(name);
+    if(ok){
+      clearInterval(pushRetryTimer); pushRetryTimer = null;
+      setSyncLine('云端主键「' + name + '」已同步 · ' + fmtTime(Date.now()));
+    }
+  }, 15000);
 }
 
 /* 直接写一条云端记录（不过“空数据不许覆盖”的检查，用于替对方移除引用这类定向改动） */
@@ -4093,7 +4143,13 @@ function mergeData(base, extra){
     // 突触码、注册时间、管理员备注都要留住，别在合并时丢掉
     synapse: ma.synapse || mb.synapse || '',
     joinedAt: (j1 && j2) ? Math.min(j1, j2) : (j1 || j2),
-    adminNotes: notes
+    adminNotes: notes,
+    // 安全码：谁有哈希留谁，两边都有就留云端那份，避免合并把它抹掉
+    devGuard: (ma.devGuard && ma.devGuard.hash) ? ma.devGuard
+      : ((mb.devGuard && mb.devGuard.hash) ? mb.devGuard : (ma.devGuard || mb.devGuard || null)),
+    // 在线会话：取时间更新的那次登录
+    session: ((Number(ma.session && ma.session.at) || 0) >= (Number(mb.session && mb.session.at) || 0))
+      ? (ma.session || mb.session || null) : (mb.session || null)
   };
   return out;
 }
@@ -4188,6 +4244,7 @@ function enterAccount(name, cloudData){
     }catch(e){ state.meta.joinedAt = Date.now(); }
   }
   touchDevice('login');
+  claimSession();
   saveLocal();
   renderMenu();
   showView($('#viewMenu'));
@@ -4247,6 +4304,9 @@ async function reconcileNow(name, opts){
   try{ pulled = await pullMerged(name, false); }catch(e){ return false; }
   const cloud = pulled && pulled.data ? pulled.data : null;
   if(pulled && pulled.at) lastCloudSyncAt = Math.max(lastCloudSyncAt, pulled.at);
+  // 账号在别的设备登录了：本机立刻停手，别再往云端写，免得两边互相覆盖
+  const taken = sessionTakenBy(cloud && cloud.meta && cloud.meta.session);
+  if(taken){ loseSession(taken); return false; }
   // 这个号在别处改了名：云端这行是「改名为 X」的指针，提示重新登录，不要拿它覆盖本机
   const renamedTo = cloud ? renameTargetOf(cloud) : '';
   if(renamedTo){
@@ -4277,7 +4337,11 @@ async function reconcileNow(name, opts){
   }
   // 云端落后：把并集写回云端（只在确实有新内容时写，避免无意义覆盖）
   if(cloudPrint !== mergedPrint){
-    await cloudPush(name, merged);
+    const ok = await cloudPush(name, merged);
+    if(!ok){
+      setSyncLine('本机已保存，云端还没写上去（正在重试）');
+      return false;
+    }
     changed = true;
   }
   if(changed && opts.quiet !== true){
@@ -4297,7 +4361,7 @@ async function reconcileNow(name, opts){
 }
 
 async function bgSyncOnce(){
-  if(!currentUser || cloudBlocked || document.hidden) return;
+  if(!currentUser || cloudBlocked || document.hidden || sessionLost) return;
   if(document.querySelector('.modal.show')) return;
   const name = currentUser;
   // 先只问一句「云端变了没」：没变就直接返回，不再下载整份档案
@@ -4364,22 +4428,67 @@ function lockOf(name){
     return (lk && lk.on && lk.hash) ? lk : null;
   }catch(e){ return null; }
 }
-async function hashPass(pw, salt){
-  const src = (salt || 'sww-lock:') + pw;
-  try{
-    const buf = new TextEncoder().encode(src);
-    const dig = await crypto.subtle.digest('SHA-256', buf);
-    return Array.from(new Uint8Array(dig)).map(b => b.toString(16).padStart(2,'0')).join('');
-  }catch(e){
-    // 非安全上下文没有 crypto.subtle 时退回到本机可复算的散列
-    let h1 = 0x811c9dc5, h2 = 0x1000193;
-    for(let i=0;i<src.length;i++){
-      const c = src.charCodeAt(i);
-      h1 = (h1 ^ c) * 16777619 >>> 0;
-      h2 = ((h2 + c) * 2654435761) >>> 0;
-    }
-    return 'f' + h1.toString(16).padStart(8,'0') + h2.toString(16).padStart(8,'0');
+/* 纯 JS SHA-256：不依赖 crypto.subtle。
+   以前 file:// 或非安全上下文会退化成弱散列，同一个口令在本地文件和网址上算出两把不同的钥匙，
+   于是「本地打开能同步、网址打开就 BAD_KEY」。这里保证任何环境结果都一致。 */
+const SHA_K = [
+0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+function shaUtf8(str){
+  if(typeof TextEncoder === 'function') return new TextEncoder().encode(str);
+  const out = [];
+  for(let i=0;i<str.length;i++){
+    const c = str.charCodeAt(i);
+    if(c < 0x80) out.push(c);
+    else if(c < 0x800){ out.push(0xc0|(c>>6), 0x80|(c&63)); }
+    else if(c >= 0xd800 && c <= 0xdbff && i+1 < str.length){
+      const c2 = str.charCodeAt(++i);
+      const cp = 0x10000 + ((c & 0x3ff) << 10) + (c2 & 0x3ff);
+      out.push(0xf0|(cp>>18), 0x80|((cp>>12)&63), 0x80|((cp>>6)&63), 0x80|(cp&63));
+    }else{ out.push(0xe0|(c>>12), 0x80|((c>>6)&63), 0x80|(c&63)); }
   }
+  return new Uint8Array(out);
+}
+function sha256Hex(str){
+  const msg = shaUtf8(str), len = msg.length;
+  const total = Math.ceil((len + 9) / 64) * 64;
+  const buf = new Uint8Array(total);
+  buf.set(msg); buf[len] = 0x80;
+  const dv = new DataView(buf.buffer), bits = len * 8;
+  dv.setUint32(total - 8, Math.floor(bits / 4294967296), false);
+  dv.setUint32(total - 4, bits >>> 0, false);
+  let H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+  const w = new Uint32Array(64);
+  const rr = (x,n) => (x >>> n) | (x << (32 - n));
+  for(let off=0; off<total; off+=64){
+    for(let i=0;i<16;i++) w[i] = dv.getUint32(off + i*4, false);
+    for(let i=16;i<64;i++){
+      const s0 = rr(w[i-15],7) ^ rr(w[i-15],18) ^ (w[i-15] >>> 3);
+      const s1 = rr(w[i-2],17) ^ rr(w[i-2],19) ^ (w[i-2] >>> 10);
+      w[i] = (w[i-16] + s0 + w[i-7] + s1) >>> 0;
+    }
+    let a=H[0],b=H[1],c=H[2],d=H[3],e=H[4],f=H[5],g=H[6],h=H[7];
+    for(let i=0;i<64;i++){
+      const S1 = rr(e,6) ^ rr(e,11) ^ rr(e,25);
+      const ch = (e & f) ^ (~e & g);
+      const t1 = (h + S1 + ch + SHA_K[i] + w[i]) >>> 0;
+      const S0 = rr(a,2) ^ rr(a,13) ^ rr(a,22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const t2 = (S0 + maj) >>> 0;
+      h=g; g=f; f=e; e=(d + t1) >>> 0; d=c; c=b; b=a; a=(t1 + t2) >>> 0;
+    }
+    H = [(H[0]+a)>>>0,(H[1]+b)>>>0,(H[2]+c)>>>0,(H[3]+d)>>>0,(H[4]+e)>>>0,(H[5]+f)>>>0,(H[6]+g)>>>0,(H[7]+h)>>>0];
+  }
+  return H.map(x => x.toString(16).padStart(8,'0')).join('');
+}
+async function hashPass(pw, salt){
+  return sha256Hex((salt || 'sww-lock:') + pw);
 }
 let lockResolve = null;
 function askPassValue(title, tip, withConfirm){
@@ -4474,6 +4583,84 @@ function othersOnline(){
 }
 function primaryDevice(){
   return metaEnsure().devices.slice().sort((a,b) => (b.freq||0) - (a.freq||0))[0] || null;
+}
+
+/* ---------- 单设备在线：一个账号同一时刻只允许一台设备在线 ----------
+   会话令牌写进账号自己的档案 meta.session，跟着同一条写入凭据走。
+   后登录的设备接管令牌；先前的设备下次核对时发现令牌不是自己，就立刻停止回写并退回登录页。
+   本机记录原样保留，重新登录后按并集合并，不会丢内容。 */
+let sessionLost = false;
+let myClaimAt = 0;
+function onlineRowOf(name){ return ONLINE_ROW + (normName(name) || name); }
+async function claimSession(){
+  if(!currentUser) return;
+  sessionLost = false;
+  cloudBlocked = false;
+  myClaimAt = Date.now();
+  const rec = { dev: deviceId(), label: deviceLabel(), at: myClaimAt };
+  const m = metaEnsure();
+  m.session = rec;
+  saveLocal();
+  // 单独写一条极小的在线记录：巡检时只读它，不用下载整份档案，也不受同步时间戳影响
+  try{ await cloudPutRaw(onlineRowOf(currentUser), rec); }catch(e){}
+}
+function sessionTakenBy(rec){
+  if(!rec || !rec.dev || rec.dev === deviceId()) return null;
+  // 只认比我们这次登录更晚的接管，避免刚登录就被自己还没推上去的旧记录顶掉
+  if((Number(rec.at) || 0) <= myClaimAt) return null;
+  return rec;
+}
+function loseSession(s){
+  if(sessionLost) return;
+  sessionLost = true;
+  cloudBlocked = true;
+  try{ clearTimeout(cloudTimer); }catch(e){}
+  setSyncLine('账号已在其他设备登录，本机已停止同步');
+  toast('「' + currentUser + '」已在 ' + (s.label || '另一台设备') + ' 登录，本机退出，避免两边互相覆盖', 5200);
+  setTimeout(() => {
+    try{
+      $('#loginName').value = currentUser || '';
+      $('#loginCancel').classList.add('hidden');
+      showView($('#viewLogin'));
+    }catch(e){}
+  }, 1400);
+}
+/* 只花几十字节问一句「令牌还在不在我这」，不用下载整份档案 */
+async function sessionCheck(){
+  if(!currentUser || sessionLost) return;
+  try{
+    const txt = await cloudReq('GET', '/rest/v1/shiwang_profiles?username=eq.' +
+      encodeURIComponent(onlineRowOf(currentUser)) + '&select=payload', null, null, 1);
+    const rows = JSON.parse(txt || '[]');
+    const row = rows && rows[0];
+    if(!row || !row.payload) return;
+    const rec = parseCloudPayload(await decodePayload(row.payload));
+    const taken = sessionTakenBy(rec);
+    if(taken) loseSession(taken);
+  }catch(e){}
+}
+
+/* 刷新页面后没有重新登录，本机就没有写入凭据，云端会一律拒绝（BAD_KEY）。
+   这里补一次口令，把凭据找回来，同步才能继续。 */
+let keyAskBusy = false;
+async function ensureWriteKey(){
+  if(!currentUser || writeKey || keyAskBusy) return !!writeKey;
+  const lk = metaEnsure().lock;
+  if(!lk || !lk.on || !lk.hash){
+    // 没设过口令的账号：云端那边还没上锁，先照常同步，登录时再引导设置
+    return false;
+  }
+  keyAskBusy = true;
+  try{
+    const pw = await askPassValue('恢复云端同步', '输入「' + currentUser + '」的账号口令，云端同步才能继续（不输则只在本机保存）', false);
+    if(!pw) return false;
+    if(await hashPass(pw) !== lk.hash){ toast('口令不对，云端同步仍未恢复', 2800); return false; }
+    writeKey = await acctKeyOfPass(pw);
+    acctKeySet(currentUser, writeKey);
+    toast('云端同步已恢复');
+    try{ cloudPush(currentUser); }catch(e){}
+    return true;
+  }finally{ keyAskBusy = false; }
 }
 
 function toggleLocalDevice(id){
@@ -4723,6 +4910,8 @@ async function autoSyncNow(manual){
 function startBgSync(){
   if(bgSyncTimer) return;
   bgSyncTimer = setInterval(() => autoSyncNow(false), AUTO_MS);   // 每 30 分钟自动同步
+  // 每 45 秒花几十字节确认「这个账号还在本机在线」，被别的设备接管就立刻停手
+  setInterval(() => { if(currentUser && !document.hidden) sessionCheck(); }, 45000);
   document.addEventListener('visibilitychange', () => { if(!document.hidden) bgSyncOnce(); });
   window.addEventListener('online', () => bgSyncOnce());
 }
@@ -4973,12 +5162,18 @@ async function ttKey(pass, salt){
   );
 }
 function ttSnapshot(){
+  const main = libGet(LIB_MAIN);
   return {
     customSets: state.customSets,
     hiddenSets: state.hiddenSets,
     enabled: state.enabled,
     unknown: state.unknown,
     known: state.known,
+    // 记忆库必须整份带走：以前这里漏了 libs/libId/libName，
+    // 自动保存推上去的档案没有副库，换设备打开就只剩主库
+    libs: state.libs,
+    libId: state.libId,
+    libName: main ? main.name : '默认记忆库',
     views: state.views,
     wordEdits: state.wordEdits || {},
     annotations: state.annotations || {},
@@ -8668,7 +8863,9 @@ function renderMenu(){
   refreshPoolInfo();
   $('#startStudy').textContent = getPoolItems().length ? '开始记忆 →' : '先去选内容';
   const st = lastCloudSyncAt || localSavedAt(currentUser || '');
-  setSyncLine(cloudBlocked ? '云端离线，连上后自动同步'
+  setSyncLine(sessionLost ? '账号已在其他设备登录，本机已停止同步'
+    : cloudBlocked ? '云端离线，连上后自动同步'
+    : cloudFailAt ? '本机已保存，云端还没写上去（正在重试）'
     : st ? '云端主键「' + (currentUser || '') + '」已同步 · ' + fmtTime(st)
     : '尚未同步到云端');
 }
@@ -11227,6 +11424,9 @@ $('#loginName').value = currentUser || '';
 if(canResume){
   // 刷新 / 重新打开：直接回到上次所在的页面，不再退回登录页
   restoreView();
+  claimSession();
+  setTimeout(() => { try{ ensureWriteKey(); }catch(e){} }, 1200);
+  setTimeout(() => { try{ cloudPush(currentUser); }catch(e){} }, 2600);
 }else{
   showView($('#viewLogin'));
   setTimeout(() => $('#loginName').focus(), 300);
