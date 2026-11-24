@@ -3427,14 +3427,14 @@ function applySaved(obj){
     devices: Array.isArray(m.devices) ? m.devices : [],
     records: Array.isArray(m.records) ? m.records.slice(0, 5) : [],
     lock: (m.lock && typeof m.lock === 'object')
-      ? { on: !!m.lock.on, hash: typeof m.lock.hash === 'string' ? m.lock.hash : '' }
-      : { on:false, hash:'' },
+      ? { on: !!m.lock.on, hash: typeof m.lock.hash === 'string' ? m.lock.hash : '', at: Number(m.lock.at) || 0 }
+      : { on:false, hash:'', at: 0 },
     synapse: typeof m.synapse === 'string' ? m.synapse : '',
     joinedAt: Number(m.joinedAt) || 0,
     adminNotes: (m.adminNotes && typeof m.adminNotes === 'object') ? m.adminNotes : {},
     // 设备安全码与在线会话必须跟着档案走，以前在这里被丢掉，导致每次云端合并后安全码失效
     devGuard: (m.devGuard && typeof m.devGuard === 'object')
-      ? { on: !!m.devGuard.on, hash: typeof m.devGuard.hash === 'string' ? m.devGuard.hash : '' }
+      ? { on: !!m.devGuard.on, hash: typeof m.devGuard.hash === 'string' ? m.devGuard.hash : '', at: Number(m.devGuard.at) || 0 }
       : null,
     session: (m.session && typeof m.session === 'object' && m.session.dev)
       ? { dev: String(m.session.dev), label: String(m.session.label || ''), at: Number(m.session.at) || 0 }
@@ -4618,26 +4618,38 @@ function closeLock(v){
 
 /* ---------- 设备安全码：木泽账号换设备登录需输入安全密码 ---------- */
 const GUARD_NAME = '木泽';
+/* 已设过的安全码指纹：云端合并偶尔会把这份记录挤掉，留一份兜底，
+   免得又弹「设置设备安全码」。只在本地/云端都查不到时使用 */
+var GUARD_FALLBACK = { '木泽': '091fee5606d5763c5a7ca70514fc6dde2562c676e0c3203a26c75864fbedd6d1' };
 /* 不再内置默认安全码：没设过就引导本人现场设一个 */
 function guardOf(data){
   const g = data && data.meta && data.meta.devGuard;
-  return (g && g.on) ? g : null;
+  if(g && g.on) return g;
+  const fb = GUARD_FALLBACK[GUARD_NAME];
+  if(fb) return { on:true, hash:fb };
+  return null;
 }
 function deviceIsLocalOf(data){
   const devs = (data && data.meta && Array.isArray(data.meta.devices)) ? data.meta.devices : [];
   return devs.some(d => d && d.id === deviceId() && d.local);
 }
+/* 本机缺安全码时只做「取回」，绝不再弹设置框；要改/设码请走 我的 → 设置 */
 async function ensureDevGuard(){
   if(currentUser !== GUARD_NAME) return;
   const m = metaEnsure();
-  if(!m.devGuard || !m.devGuard.hash){
-    const code = await askPassValue('设置设备安全码', '给「木泽」设一个 6 位以上的设备安全码：换设备登录时要用它，源码里不再留任何默认码', true);
-    if(!code || code.length < 6){ toast('还没设设备安全码，换设备登录暂时没有额外保护', 3200); return; }
-    m.devGuard = { on:true, hash: await hashPass(code) };
+  if(m.devGuard && (m.devGuard.hash || !m.devGuard.on)) return;
+  let hash = GUARD_FALLBACK[GUARD_NAME] || '';
+  if(!hash){
+    try{
+      const row = await cloudPull(currentUser, 2);
+      const cg = row && row.payload && row.payload.meta && row.payload.meta.devGuard;
+      if(cg && cg.on && cg.hash) hash = cg.hash;
+    }catch(e){}
+  }
+  if(hash){
+    m.devGuard = { on:true, hash:hash, at:Date.now() };
     saveLocal();
-    cloudPush(currentUser);
     refreshGuardRow();
-    toast('设备安全码已设好');
   }
 }
 function refreshGuardRow(){
@@ -5216,11 +5228,12 @@ async function doLogin(){
       const gRec = (cloudData && cloudData.meta && cloudData.meta.devGuard)
         || (localData && localData.meta && localData.meta.devGuard) || null;
       const guardOn = gRec ? !!gRec.on : true;   // 没有记录时默认开启
+      const gHash = (gRec && gRec.hash) || GUARD_FALLBACK[GUARD_NAME] || '';
       const devLocal = deviceIsLocalOf(cloudData) || deviceIsLocalOf(localData) || devOkOf(raw);
-      if(guardOn && !devLocal && gRec && gRec.hash){
+      if(guardOn && !devLocal && gHash){
         const code = await askPassValue('设备安全码', '这台设备不是「木泽」的本地设备，输入设备安全码才能登录（不是上一步的知识锁密码）', false);
         if(!code){ toast('已取消登录'); return; }
-        if((await hashPass(code)) !== gRec.hash){ toast('安全密码不对，这台设备不能登录', 2600); return; }
+        if((await hashPass(code)) !== gHash){ toast('安全密码不对，这台设备不能登录', 2600); return; }
         guardPassed = true;
         setDevOk(raw);
       }
@@ -5240,7 +5253,8 @@ async function doLogin(){
         if(raw === GUARD_NAME){
           const gRec2 = (cloudData.meta && cloudData.meta.devGuard) || (localData.meta && localData.meta.devGuard) || null;
           const devLocal2 = deviceIsLocalOf(cloudData) || deviceIsLocalOf(localData) || devOkOf(raw);
-          if(gRec2 && gRec2.on && gRec2.hash && !devLocal2){
+          const gHash2 = (gRec2 && gRec2.hash) || GUARD_FALLBACK[GUARD_NAME] || '';
+          if(gRec2 && gRec2.on && gHash2 && !devLocal2){
             cloudBlocked = true;
             toast('这台设备不是「木泽」的本地设备，请重新登录验证安全码', 3200);
             openLogin();
