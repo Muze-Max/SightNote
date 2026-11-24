@@ -1466,6 +1466,18 @@
   }
 
   /* 移民：打印时只留导出的版面 */
+  .cloud-line{font-size:12px;color:var(--soft);margin-top:8px;}
+  .sep-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
+  .sep-row .sep-lab{font-size:11px;color:var(--soft);letter-spacing:.06em;margin-right:2px;}
+  .sep-chip{
+    font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--line);
+    border-radius:9px;background:#fff;color:var(--ink);cursor:pointer;line-height:1.2;
+  }
+  .sep-chip.on{background:var(--ink);color:#fff;border-color:var(--ink);}
+  .sep-custom{
+    width:74px;font:inherit;font-size:12px;padding:5px 8px;border:1px solid var(--line);
+    border-radius:9px;outline:none;background:#fff;color:var(--ink);
+  }
   @media print{
     @page{size:A4 portrait;margin:14mm 12mm;}
     body>*{display:none !important;}
@@ -1710,13 +1722,6 @@
           <button class="switch" id="guardSwitch" aria-label="设备安全码"></button>
         </div>
       </div>
-      <div class="setting-row" id="guideRow">
-        <div>
-          功能讲解
-          <div class="desc">每个按钮是干什么用的，一页看完</div>
-        </div>
-        <button class="btn-line" id="openGuide" style="padding:7px 15px;font-size:11px;">查看 ›</button>
-      </div>
       <div class="setting-row" id="deskRow">
         <div>
           桌面图标
@@ -1730,20 +1735,6 @@
           <div class="desc">把当前全部内容存成一个文件，云端出事时可用它恢复</div>
         </div>
         <button class="btn-line" id="exportBak" style="padding:7px 15px;font-size:11px;">导出 ›</button>
-      </div>
-      <div class="setting-row" id="adminRow" style="display:none;">
-        <div>
-          安全员
-          <div class="desc">最高权限：查看全部用户、删除与恢复用户</div>
-        </div>
-        <button class="btn-line" id="openAdmin" style="padding:7px 15px;font-size:11px;">进入 ›</button>
-      </div>
-      <div class="setting-row" id="bcastRow" style="display:none;">
-        <div>
-          传信
-          <div class="desc" id="bcastDesc">给所有用户发一条传信：文字、照片，或导入 PDF（自动转成长图）</div>
-        </div>
-        <button class="btn-line" id="openBcast" style="padding:7px 15px;font-size:11px;">编写 ›</button>
       </div>
       <div class="setting-row">
         <div>
@@ -1775,6 +1766,7 @@
           <path d="M13.6 7.4l3 3"/>
         </svg>
       </button>
+      <button class="net-btn" id="cloudStoreBtn" title="云端储存：把此刻的状态存成云端最新版">云端储存</button>
       <button class="net-btn" id="netBtn" title="调整每页词条数量">视网 <span id="netNow">32</span></button>
     </div>
   </div>
@@ -1819,6 +1811,7 @@
       <button class="btn-line" id="addItem">＋ 添加词条</button>
       <button class="btn-line" id="renameSet">重命名</button>
       <button class="btn-line" id="exportSetPDF">移民 · 导出为 PDF</button>
+      <button class="btn-line" id="migrateBtn">迁移 · 导出 / 导入</button>
       <button class="btn-line" id="setMove">移入知识库</button>
       <button class="btn-line" id="deleteSet">删除知识库</button>
       <button class="btn-line multi-btn" id="setMulti">多选</button>
@@ -1855,6 +1848,44 @@
   </div>
 </div>
 <div id="pdfSheet" aria-hidden="true"></div>
+
+<!-- ============== 知识库迁移：导出 / 导入 ============== -->
+<div class="modal hidden" id="migrateModal">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h3>迁移这个知识库</h3>
+      <button class="close-x" id="closeMigrate" aria-label="关闭">×</button>
+    </div>
+    <div class="sheet-body">
+      <p class="format-tip" id="migrateTip">导出的文档可以再导入回任何账号，批注一起带走；图片只适合给别人看，批注不会出现在图片里。</p>
+      <div style="display:flex;flex-direction:column;gap:9px;margin-top:6px;">
+        <button class="btn-line" id="migExportDoc" style="width:100%;text-align:left;padding:11px 14px;">导出文档（.json）· 可再导入，含批注</button>
+        <button class="btn-line" id="migExportImg" style="width:100%;text-align:left;padding:11px 14px;">导出图片（.png）· 不含批注</button>
+        <label class="btn-line" id="migImportLbl" style="width:100%;text-align:left;padding:11px 14px;display:block;cursor:pointer;">
+          导入文档到这个知识库
+          <input type="file" id="migImportFile" accept=".json,application/json" style="display:none;">
+        </label>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============== 云端储存 ============== -->
+<div class="modal hidden" id="cloudModal">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h3>云端储存</h3>
+      <button class="close-x" id="closeCloud" aria-label="关闭">×</button>
+    </div>
+    <div class="sheet-body">
+      <p class="format-tip" id="cloudTip">把此刻界面上的一切（知识库、批注、生熟词、记录）作为云端最新一版存上去。</p>
+      <div class="cloud-line" id="cloudStatus">正在读取…</div>
+      <button class="primary" id="cloudSaveNow" style="width:100%;margin:10px 0 4px;">保存当前状态到云端</button>
+      <div class="tt-label" style="margin-top:14px;">云端版本 · 仅保留近一天</div>
+      <div class="transit-sets" id="cloudVersions"><div class="transit-empty">还在读取…</div></div>
+    </div>
+  </div>
+</div>
 
 <!-- ============== 释义卡片 ============== -->
 <div id="card">
@@ -2044,11 +2075,23 @@
     <div class="sheet-body">
       <!-- 文字 -->
       <div class="pane on" id="paneText">
+        <div class="sep-row" id="sepRow">
+          <span class="sep-lab">隔开符号</span>
+          <button class="sep-chip on" data-sep="→" type="button">→</button>
+          <button class="sep-chip" data-sep="；" type="button">；</button>
+          <button class="sep-chip" data-sep="、" type="button">、</button>
+          <button class="sep-chip" data-sep="，" type="button">，</button>
+          <button class="sep-chip" data-sep="/" type="button">/</button>
+          <button class="sep-chip" data-sep="——" type="button">——</button>
+          <button class="sep-chip" data-sep="blank" type="button">空行</button>
+          <button class="sep-chip" data-sep="custom" type="button">自定义</button>
+          <input id="sepCustom" class="sep-custom" maxlength="6" placeholder="填符号" spellcheck="false" style="display:none;">
+        </div>
         <textarea id="textInput" placeholder="abandon→v.→放弃→词根 ab- 强调 + andon 放弃&#10;give up→phr.→放弃&#10;abstract→adj.→抽象的→词根 ab- 强调 + tract 拉/抽&#10;The plan failed.→→计划失败了。"></textarea>
-        <p class="format-tip">
+        <p class="format-tip" id="textFormatTip">
           每行一条，四段之间只用「→」隔开，顺序就是记忆存储的前四行：<br>
           ① 内容 → ③ 词性 → ② 释义 → ④ 备注 / 词根。<br>
-          词性或备注不需要就留空（写成「give up→phr.→放弃」或「a→→释义→备注」都行），不要用逗号、空格替代「→」。类型（单词 / 短语 / 句子）自动判断。
+          词性或备注不需要就留空（写成「give up→phr.→放弃」或「a→→释义→备注」都行）。类型（单词 / 短语 / 句子）自动判断。
         </p>
       </div>
 
@@ -2211,9 +2254,6 @@
       <div class="transit-input">
         <input id="dstInput" maxlength="20" placeholder="或输入目标账号名" spellcheck="false">
       </div>
-
-      <div class="tt-label">云端版本 · 仅保留近一天</div>
-      <div class="transit-sets" id="transitVersions"><div class="transit-empty">近一天同步后，这里会出现可回退的版本</div></div>
     </div>
     <div class="sheet-foot">
       <button class="btn-line" id="transitCancel">取消</button>
@@ -3503,17 +3543,9 @@ function loadProfile(name){
   applySaved(data);
 }
 
-/* 管理员永远不写进好友列表（普通用户视角） */
+/* 「木泽」可以像普通用户一样作为好友，不再从好友里剔掉 */
 function sanitizeAdminFriendLocal(){
-  try{
-    const s = state && state.social;
-    if(!s || typeof s !== 'object') return;
-    const adm = adminNameSafe();
-    const cu = currentNameSafe();
-    if(!adm || cu === adm) return;
-    if(Array.isArray(s.friends) && s.friends.indexOf(adm) >= 0) s.friends = s.friends.filter(n => n !== adm);
-    if(s.notes && s.notes[adm]) delete s.notes[adm];
-  }catch(e){}
+  return;
 }
 
 function saveLocal(){
@@ -4414,8 +4446,30 @@ function startCloudRetry(name){
   }, 12000);
 }
 
+/* 换账号时，把上一个账号留在内存和界面上的东西全部清掉：
+   否则同一个窗口里会出现「名字换了、消息还是上一个人的」 */
+function resetAccountScopedUi(){
+  try{ chatFriend = ''; chatGroupId = ''; chatAdminPeer = ''; chatView = []; }catch(e){}
+  try{ clearInterval(chatTimer); chatTimer = null; }catch(e){}
+  try{ msgOutbox = []; }catch(e){}
+  try{ adminCodeCache = ''; }catch(e){}
+  try{ fxEditTarget = ''; }catch(e){}
+  try{ annotEditing = ''; }catch(e){}
+  // 关掉所有还开着的浮层（聊天、批注、分享、迁移…），别把上一个人的内容留在屏幕上
+  try{
+    document.querySelectorAll('.view').forEach(v => { if(v.id !== 'viewLogin') v.classList.add('hidden'); });
+    document.querySelectorAll('.modal').forEach(m => { m.classList.remove('show'); m.classList.add('hidden'); });
+    if($('#annotPanel')) $('#annotPanel').classList.add('hidden');
+    if($('#chatMsgs')) $('#chatMsgs').innerHTML = '';
+    if($('#chatTitle')) $('#chatTitle').textContent = '';
+    if($('#chatText')) $('#chatText').value = '';
+  }catch(e){}
+  try{ setSocialTab('friend'); }catch(e){}
+}
+
 function enterAccount(name, cloudData){
   renameHop = 0;
+  resetAccountScopedUi();
   currentUser = normName(name) || name;
   try{ localStorage.setItem(CURRENT_KEY, currentUser); }catch(e){}
   loadProfile(currentUser);
@@ -5966,7 +6020,7 @@ function refreshBakRow(){
 }
 
 async function refreshVersions(){
-  const box = $('#transitVersions');
+  const box = $('#cloudVersions');
   if(!box) return;
   if(!currentUser){ box.innerHTML = '<div class="transit-empty">登录后可用</div>'; return; }
   box.innerHTML = '<div class="transit-empty">正在读取云端版本…</div>';
@@ -6062,29 +6116,8 @@ async function ensureAdminFriend(){
 /* 管理员不当作好友：只清掉旧版本自动加进来的那条；
    好友里的聊天记录原样保留（那是私人聊天，不进管理员通道） */
 async function stripAdminFriend(){
-  if(!currentUser || currentUser === ADMIN_NAME) return false;
-  const s = social();
-  let changed = false;
-  if(s.friends.includes(ADMIN_NAME)){
-    s.friends = s.friends.filter(n => n !== ADMIN_NAME);
-    changed = true;
-  }
-  if(s.read && s.read[ADMIN_NAME]){ delete s.read[ADMIN_NAME]; changed = true; }
-  if(s.notes && s.notes[ADMIN_NAME]){ delete s.notes[ADMIN_NAME]; changed = true; }
-  if(changed){
-    save();
-    try{ renderSocial(); }catch(e){}
-    // 只改云端那一行的好友列表；聊天记录保持原样
-    try{
-      const row = await cloudPull(currentUser);
-      const d = row ? parseCloudPayload(row.payload) : null;
-      if(d){
-        d.social = normSocial(state.social);
-        await cloudPutRaw(currentUser, d);
-      }
-    }catch(e){}
-  }
-  return changed;
+  // 「木泽」现在可以像普通用户一样加为好友，不再从好友列表里剔除
+  return false;
 }
 function remarkOf(name){
   const v = social().notes ? social().notes[name] : '';
@@ -6206,7 +6239,7 @@ function openSocial(){
 
 function renderSocial(){
   const list = $('#friendList');
-  const friendNames = social().friends.filter(n => !(n === ADMIN_NAME && !isAdmin()));
+  const friendNames = social().friends.slice();
   const note = $('#friendNote');
   if(note) note.textContent = friendNames.length ? '共 ' + friendNames.length + ' 位' : '还没有好友';
 
@@ -6681,11 +6714,6 @@ async function addFriend(){
   if(name === currentUser){
     $('#friendAdd').disabled = false;
     toast('这是你自己的突触码');
-    return;
-  }
-  if(name === ADMIN_NAME){
-    $('#friendAdd').disabled = false;
-    toast('管理员在「管理员」里聊，不能加成好友');
     return;
   }
   if(social().friends.includes(name)){
@@ -10114,6 +10142,174 @@ function closePdfExport(){
   setTimeout(() => m.classList.add('hidden'), 200);
 }
 if($('#exportSetPDF')) $('#exportSetPDF').addEventListener('click', openPdfExport);
+
+/* —— 迁移按钮与云端储存的界面绑定 —— */
+if($('#migrateBtn')) $('#migrateBtn').addEventListener('click', () => {
+  const set = getSetById(manageSetId);
+  if(!set){ toast('先打开一个知识库'); return; }
+  if($('#migrateTip')) $('#migrateTip').textContent = '「' + set.name + '」共 ' + (set.items || []).length + ' 条。导出的文档可以再导入回任何账号，批注一起带走；图片只适合给别人看，批注不会出现在图片里。';
+  showModal($('#migrateModal'));
+});
+if($('#closeMigrate')) $('#closeMigrate').addEventListener('click', () => hideModal($('#migrateModal')));
+if($('#migrateModal')) $('#migrateModal').addEventListener('click', e => { if(e.target === $('#migrateModal')) hideModal($('#migrateModal')); });
+if($('#migExportDoc')) $('#migExportDoc').addEventListener('click', () => { exportSetDoc(); hideModal($('#migrateModal')); });
+if($('#migExportImg')) $('#migExportImg').addEventListener('click', () => { exportSetImage(); hideModal($('#migrateModal')); });
+if($('#migImportFile')) $('#migImportFile').addEventListener('change', e => {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if(f){ importSetDoc(f); hideModal($('#migrateModal')); }
+});
+if($('#cloudStoreBtn')) $('#cloudStoreBtn').addEventListener('click', () => openCloudStore());
+if($('#closeCloud')) $('#closeCloud').addEventListener('click', () => hideModal($('#cloudModal')));
+if($('#cloudModal')) $('#cloudModal').addEventListener('click', e => { if(e.target === $('#cloudModal')) hideModal($('#cloudModal')); });
+if($('#cloudSaveNow')) $('#cloudSaveNow').addEventListener('click', async () => {
+  if(!currentUser){ toast('先登录'); return; }
+  const btn = $('#cloudSaveNow');
+  btn.disabled = true; btn.textContent = '正在保存…';
+  const ok = await cloudPush(currentUser, ttSnapshot());
+  btn.disabled = false; btn.textContent = '保存当前状态到云端';
+  if(ok){
+    cloudCntSet(currentUser, ttSnapshot());
+    toast('已保存为云端最新一版');
+  }else{
+    toast('云端没写上去，检查网络后再点一次');
+  }
+  refreshCloudStatus();
+  refreshVersions();
+});
+function openCloudStore(){
+  if(!currentUser){ toast('先登录'); return; }
+  showModal($('#cloudModal'));
+  refreshCloudStatus();
+  refreshVersions();
+}
+function refreshCloudStatus(){
+  const el = $('#cloudStatus');
+  if(!el) return;
+  try{
+    const at = Number(localStorage.getItem('sww-cloud-at@' + normName(currentUser)) || 0);
+    const c = contentCount(state);
+    el.textContent = at ? ('上次同步：' + fmtTime(at) + ' · 词条 ' + c.items + ' 条 · 生熟词 ' + c.words)
+                        : ('这台设备还没同步过云端 · 当前词条 ' + c.items + ' 条');
+  }catch(e){ el.textContent = ''; }
+}
+
+
+/* ================== 知识库「迁移」：导出 / 导入 ==================
+   ① 文档（.json）：连同批注一起导出，之后能再导入回任意账号；
+   ② 图片（.png）：整库排成一张长图，方便发给别人看，批注不包含在图片里。 */
+const MIGRATE_KIND = 'sightnote-set';
+function downloadBlob(name, blob){
+  try{
+    const a = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1200);
+  }catch(e){ toast('这个浏览器不支持直接下载'); }
+}
+function exportSetDoc(){
+  const set = getSetById(manageSetId);
+  if(!set){ toast('先打开一个知识库'); return; }
+  const annots = {};
+  let n = 0;
+  (set.items || []).forEach(it => {
+    const a = state.annotations && state.annotations[keyOf(it)];
+    if(a && (a.text || (a.strokes && a.strokes.length))){ annots[keyOf(it)] = a; n++; }
+  });
+  const payload = {
+    app: 'SightNote', kind: MIGRATE_KIND, v: 1,
+    name: set.name, at: Date.now(),
+    items: (set.items || []).map(it => ({ en: it.en, pos: it.pos || '', zh: it.zh || '', root: it.root || '', type: it.type || '' })),
+    annotations: annots
+  };
+  const txt = JSON.stringify(payload, null, 1);
+  downloadBlob('视网速记-知识库-' + (set.name || '未命名').replace(/[\\\/:*?"<>|]/g, '_') + '-' + new Date().toLocaleDateString('sv-SE') + '.json',
+    new Blob([txt], { type: 'application/json;charset=utf-8' }));
+  toast('已导出「' + set.name + '」：' + payload.items.length + ' 条，含 ' + n + ' 条批注');
+}
+/* 把整库画成一张长图（批注是覆盖层，不进图片） */
+function exportSetImage(){
+  const set = getSetById(manageSetId);
+  if(!set){ toast('先打开一个知识库'); return; }
+  const items = set.items || [];
+  if(!items.length){ toast('这个知识库还是空的'); return; }
+  const W = 1240, PAD = 56, LH = 34, GAP = 26;
+  const lines = [];
+  const wrap = (txt, max) => {
+    const out = []; let cur = '';
+    for(const ch of String(txt || '')){ cur += ch; if(cur.length >= max){ out.push(cur); cur = ''; } }
+    if(cur) out.push(cur);
+    return out;
+  };
+  const head = ['SightNote · ' + (set.name || '知识库'), items.length + ' 条 · 导出 ' + new Date().toLocaleString('zh-CN', { hour12:false })];
+  head.forEach(t => lines.push({ t: t, c: '#9a9a90', s: 20, g: 10 }));
+  lines.push({ t: '', c: '#000', s: 20, g: 16 });
+  items.forEach((it, i) => {
+    lines.push({ t: (i + 1) + '. ' + it.en, c: '#111111', s: 30, g: 0, bold: true });
+    const sub = [];
+    if(it.pos) sub.push(it.pos);
+    if(it.zh) sub.push(it.zh);
+    if(it.root) sub.push(it.root);
+    wrap(sub.join('　'), 46).forEach(t => lines.push({ t: t, c: '#4a4a44', s: 24, g: 0 }));
+    lines.push({ t: '', c: '#000', s: 20, g: GAP - 8 });
+  });
+  const H = PAD * 2 + lines.reduce((s, l) => s + l.s + l.g, 0);
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = Math.max(320, H);
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#fbfbf8'; ctx.fillRect(0, 0, cv.width, cv.height);
+  let y = PAD;
+  lines.forEach(l => {
+    if(l.t){
+      ctx.fillStyle = l.c;
+      ctx.font = (l.bold ? '600 ' : '') + l.s + 'px "PingFang SC","Microsoft YaHei",system-ui,sans-serif';
+      ctx.fillText(l.t, PAD, y + l.s);
+    }
+    y += l.s + l.g;
+  });
+  cv.toBlob(blob => {
+    if(!blob){ toast('生成图片失败'); return; }
+    downloadBlob('视网速记-知识库-' + (set.name || '未命名').replace(/[\\\/:*?"<>|]/g, '_') + '-' + new Date().toLocaleDateString('sv-SE') + '.png', blob);
+    toast('已导出图片（批注不会出现在图片里）');
+  }, 'image/png');
+}
+/* 导入 .json：加进当前打开的知识库，批注一起回来 */
+function importSetDoc(file){
+  if(!file) return;
+  const fr = new FileReader();
+  fr.onload = () => {
+    let obj = null;
+    try{ obj = JSON.parse(String(fr.result || '')); }catch(e){}
+    if(!obj || obj.kind !== MIGRATE_KIND || !Array.isArray(obj.items)){
+      toast('这不是视网速记导出的知识库文档'); return;
+    }
+    const set = getSetById(manageSetId);
+    if(!set){ toast('先打开一个知识库再导入'); return; }
+    let add = 0, dup = 0, ann = 0;
+    obj.items.forEach(it => {
+      const en = String(it.en || '').trim();
+      if(!en) return;
+      if(set.items.some(x => keyOf(x) === (it.en + '|' + (it.zh || '')))){ dup++; return; }
+      if(set.items.some(x => String(x.en || '').toLowerCase() === en.toLowerCase())){ dup++; return; }
+      set.items.push({ en: en, pos: it.pos || '', zh: it.zh || '未填写释义', root: it.root || '', type: it.type || autoTypeOf(en) });
+      add++;
+    });
+    if(obj.annotations && typeof obj.annotations === 'object'){
+      state.annotations = state.annotations || {};
+      Object.keys(obj.annotations).forEach(k => {
+        // 只补自己没有的批注，不覆盖本机已有笔记
+        if(!state.annotations[k] && obj.annotations[k]){ state.annotations[k] = obj.annotations[k]; ann++; }
+      });
+    }
+    save();
+    renderSetView();
+    renderMenu();
+    toast('从「' + (obj.name || '备份') + '」导入 ' + add + ' 条、批注 ' + ann + ' 条' + (dup ? '，跳过重复 ' + dup + ' 条' : ''));
+  };
+  fr.readAsText(file, 'utf-8');
+}
+
 if($('#pdfSave')) $('#pdfSave').addEventListener('click', saveSetPdf);
 if($('#pdfShare')) $('#pdfShare').addEventListener('click', shareSetPdf);
 if($('#closePdf')) $('#closePdf').addEventListener('click', closePdfExport);
@@ -11463,6 +11659,7 @@ function openImport(){
   $('#imgProgress').textContent = '';
   $('#imgBar').style.width = '0%';
   $('#newSetName').value = '';
+  setImportSep(importSep || '→');
 }
 function closeImport(){
   modal.classList.remove('show');
@@ -11494,7 +11691,18 @@ function showPane(which){
   }
 }
 
-/* —— 文字解析（记忆存储：每四行一条，① 内容 → ③ 词性 → ② 释义 → ④ 备注/词根） —— */
+/* —— 分隔符：用户在「添加内容」里自选 —— */
+if($('#sepRow')) $('#sepRow').addEventListener('click', e => {
+  const b = e.target.closest('.sep-chip');
+  if(!b) return;
+  setImportSep(b.dataset.sep);
+});
+if($('#sepCustom')) $('#sepCustom').addEventListener('input', () => {
+  if(importSep !== 'custom') return;
+  setImportSep('custom');
+});
+
+/* —— 文字解析（记忆存储：每四段一条，① 内容 / ③ 词性 / ② 释义 / ④ 备注·词根） —— */
 $('#confirmImport').addEventListener('click', () => {
   if($('#panePreview').classList.contains('on')){
     saveImport();
@@ -11512,8 +11720,53 @@ function autoTypeOf(en){
   const words = String(en || '').trim().split(/\s+/).filter(Boolean).length;
   return (/[.?!]$/.test(en) || words >= 5) ? 'sentence' : (words >= 2 ? 'phrase' : 'word');
 }
-/* 文字导入：一行一条，四段之间只用「→」隔开，顺序为
-   ① 内容 → ③ 词性 → ② 释义 → ④ 备注 / 词根（对应记忆存储的前四行） */
+/* 文字导入的分隔符：用户自己在「添加内容」里选，默认「→」 */
+let importSep = '→';
+function sepLabelOf(v){
+  if(v === 'blank') return '空行';
+  if(v === 'custom') return ($('#sepCustom') && $('#sepCustom').value) || '自定义';
+  return v;
+}
+function sepRegExp(v){
+  if(v && v !== 'blank' && v !== '→'){
+    // 用户自定义/选择的符号按字面量处理，转义正则特殊字符
+    return new RegExp('\\s*' + String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*');
+  }
+  return /\s*(?:→|->|⇒)\s*/;
+}
+function syncSepTip(){
+  const tip = $('#textFormatTip');
+  if(!tip) return;
+  const lab = sepLabelOf(importSep);
+  if(importSep === 'blank'){
+    tip.innerHTML = '用「空行」分组：一条内容里，每行一段，顺序就是记忆存储的前四行：<br>' +
+      '① 内容 / ③ 词性 / ② 释义 / ④ 备注·词根，四行写完，中间空一行再写下一个词。<br>' +
+      '词性或备注不需要就整行留空跳过。类型（单词 / 短语 / 句子）自动判断。';
+  }else{
+    tip.innerHTML = '每行一条，四段之间只用「' + escapeHtml(lab) + '」隔开，顺序就是记忆存储的前四行：<br>' +
+      '① 内容 ' + escapeHtml(lab) + ' ③ 词性 ' + escapeHtml(lab) + ' ② 释义 ' + escapeHtml(lab) + ' ④ 备注 / 词根。<br>' +
+      '词性或备注不需要就留空（写成「give up' + escapeHtml(lab) + 'phr.' + escapeHtml(lab) + '放弃」或「a' + escapeHtml(lab) + escapeHtml(lab) + '释义' + escapeHtml(lab) + '备注」都行）。类型（单词 / 短语 / 句子）自动判断。';
+  }
+}
+function setImportSep(v){
+  importSep = v || '→';
+  document.querySelectorAll('#sepRow .sep-chip').forEach(b => b.classList.toggle('on', b.dataset.sep === importSep));
+  const cu = $('#sepCustom');
+  if(cu){
+    cu.style.display = (importSep === 'custom') ? '' : 'none';
+    if(importSep === 'custom'){ cu.focus(); }
+  }
+  if($('#textInput')) $('#textInput').placeholder = textPlaceholderFor(importSep);
+  syncSepTip();
+}
+function textPlaceholderFor(v){
+  const s = (v && v !== 'blank' && v !== 'custom') ? v : (v === 'custom' ? (($('#sepCustom') && $('#sepCustom').value) || '→') : '→');
+  if(v === 'blank') return 'abandon\nv.\n放弃\n词根 ab- 强调 + andon 放弃\n\n give up\nphr.\n放弃';
+  return 'abandon' + s + 'v.' + s + '放弃' + s + '词根 ab- 强调 + andon 放弃\n' +
+         'give up' + s + 'phr.' + s + '放弃\n' +
+         'abstract' + s + 'adj.' + s + '抽象的' + s + '词根 ab- 强调 + tract 拉/抽\n' +
+         'The plan failed.' + s + s + '计划失败了。';
+}
 function parseMemoryText(text){
   const out = [];
   const seen = new Set();
@@ -11524,12 +11777,25 @@ function parseMemoryText(text){
     .replace(/\s+/g, ' ')
     .trim();
 
-  text.split(/\r?\n/).forEach(raw => {
-    let line = String(raw).replace(/\u00a0/g, ' ');
-    if(!line.trim()) return;
-    // 允许写成 -> 或 ⇒，但规范只认「→」
-    const segs = line.split(/\s*(?:→|->|⇒)\s*/).map(cleanSeg);
-    if(segs.length < 2) return;          // 没有「→」不能算一条
+  // 「空行」模式：按空行把文本分组，每组里一行一段
+  let records = [];
+  if(importSep === 'blank'){
+    text.split(/\n\s*\n+/).forEach(block => {
+      const lines = block.split(/\r?\n/).map(cleanSeg).filter((s, i, arr) => s !== '' || i > 0);
+      if(lines.length) records.push(lines);
+    });
+  }else{
+    const re = sepRegExp(importSep);
+    text.split(/\r?\n/).forEach(raw => {
+      const line = String(raw).replace(/\u00a0/g, ' ');
+      if(!line.trim()) return;
+      const segs = line.split(re).map(cleanSeg);
+      if(segs.length < 2) return;          // 没有分隔符不能算一条
+      records.push(segs);
+    });
+  }
+
+  records.forEach(segs => {
 
     let en = segs[0];
     if(!en || !/[A-Za-z]/.test(en)) return;
