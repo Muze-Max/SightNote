@@ -1523,6 +1523,7 @@
         <button class="login-go" type="submit">进入 →</button>
       </div>
     </form>
+    <p class="login-sub hidden" id="loginGuardHint" style="margin:8px 0 0;">「木泽」登录要依次输入三道密码：知识锁 → 账号口令 → 安全员口令</p>
 
     <div class="user-chips" id="userChips"></div>
     <button class="login-back hidden" id="loginCancel">← 返回当前用户</button>
@@ -4386,6 +4387,8 @@ function mergeData(base, extra, opts){
     devices: devices,
     records: records.slice(0, 5),
     lock: pickMetaSwitch(ma.lock, mb.lock, { on:false, hash:'' }),
+    // 第二道登录密码（账号口令）：同样是「后改的赢」，别让旧设备合并时把它抹掉
+    acct2: pickMetaSwitch(ma.acct2, mb.acct2, null),
     // 突触码、注册时间、管理员备注都要留住，别在合并时丢掉
     synapse: ma.synapse || mb.synapse || '',
     joinedAt: (j1 && j2) ? Math.min(j1, j2) : (j1 || j2),
@@ -5247,6 +5250,8 @@ function openLogin(){
 
   $('#loginCancel').classList.toggle('hidden', !currentUser || !!lockOf(currentUser));
   $('#loginName').value = currentUser || '';
+  const gh = $('#loginGuardHint');
+  if(gh) gh.classList.toggle('hidden', !(currentUser && currentUser === ADMIN_NAME));
   showView($('#viewLogin'));
   setTimeout(() => { $('#loginName').focus(); }, 260);
 }
@@ -5337,6 +5342,70 @@ async function doLogin(){
       passedHash = lockNow.hash;
       setLockOkCache(raw, lockNow.hash);
       knownPass = pw;
+    }
+
+    // 2.6) 「木泽」专属：知识锁之后还要再过两道——账号口令、安全员口令
+    //      顺序固定：① 知识锁 → ② 账号口令 → ③ 安全员口令，错任何一道都进不去
+    if(raw === ADMIN_NAME){
+      const early2 = await waitAtMost(pullP, 4200);
+      if(early2 && !early2.__timeout && early2.data){ cloudData = early2.data; cloudAt = early2.at || 0; }
+      if(!cloudData && !localData){ toast('云端连不上，「木泽」的三道密码没法校验，稍后重试', 3000); return; }
+
+      // ① 知识锁：以云端这一版为准（云端没开就不问）
+      const lk = (cloudData && cloudData.meta && cloudData.meta.lock)
+        || (localData && localData.meta && localData.meta.lock) || null;
+      if(lk && lk.on && lk.hash && lk.hash !== passedHash){
+        const pw1 = await askPassValue('第 1 道 · 知识锁', '「木泽」的登录密码', false);
+        if(!pw1){ toast('已取消登录'); return; }
+        if(await hashPass(pw1) !== lk.hash){ toast('第 1 道密码不对，无法进入', 2600); return; }
+        passedHash = lk.hash;
+        setLockOkCache(raw, lk.hash);
+        knownPass = pw1;
+      }
+
+      // ② 账号口令：存在本账号的 meta.acct2 里；第一次登录时在这里设一次
+      let acct2 = (cloudData && cloudData.meta && cloudData.meta.acct2)
+        || (localData && localData.meta && localData.meta.acct2) || null;
+      const setAcct2 = (rec) => {
+        if(cloudData){ cloudData.meta = cloudData.meta || {}; cloudData.meta.acct2 = rec; }
+        if(localData){ localData.meta = localData.meta || {}; localData.meta.acct2 = rec; }
+      };
+      if(acct2 && acct2.on && acct2.hash){
+        const pw2 = await askPassValue('第 2 道 · 账号口令', '输入「木泽」的账号口令', false);
+        if(!pw2){ toast('已取消登录'); return; }
+        if(await hashPass(pw2) !== acct2.hash){ toast('第 2 道密码不对，无法进入', 2600); return; }
+      }else{
+        const np = await askPassValue('第 2 道 · 账号口令', '第一次要设一道账号口令（4 位以上），以后每次登录都要输入', true);
+        if(!np){ toast('已取消登录'); return; }
+        if(np.length < 4){ toast('账号口令至少 4 位', 2400); return; }
+        acct2 = { on:true, hash: await hashPass(np), at: Date.now() };
+        setAcct2(acct2);
+        toast('第 2 道账号口令已设好，云端会记住它');
+      }
+
+      // ③ 安全员口令：就是云端「#口令#」那条，和进入安全员面板用的是同一个
+      let prec = null;
+      try{ prec = await passPull(); }catch(e){ prec = null; }
+      if(prec){
+        const pw3 = await askPassValue('第 3 道 · 安全员口令', '最后一道：安全员口令', false);
+        if(!pw3){ toast('已取消登录'); return; }
+        const h3 = await hashPass(pw3), alt3 = fnvPass(pw3);
+        if(!((h3 && h3 === prec.hash) || (alt3 && alt3 === prec.alt))){
+          toast('第 3 道密码不对，无法进入', 2600); return;
+        }
+        adminPassOk = true; adminPassPlain = pw3; adminPassOwner = raw;
+      }else if(!cloudData){
+        toast('云端连不上，安全员口令校验不了，稍后重试', 3000); return;
+      }else{
+        const np3 = await askPassValue('第 3 道 · 安全员口令', '云端还没有安全员口令：现在设一条，至少 8 位', true);
+        if(!np3){ toast('已取消登录'); return; }
+        if(np3.length < 8){ toast('安全员口令至少 8 位', 2400); return; }
+        try{
+          sysKeySet(await acctKeyOfPass(np3), sysKey);
+          await passPush(np3);
+        }catch(e){ toast('安全员口令写入云端失败，稍后重试', 2800); return; }
+        adminPassOk = true; adminPassPlain = np3; adminPassOwner = raw;
+      }
     }
 
     // 3) 有本机档案 → 立刻进门，云端放到后台对齐；以前在这里干等 5 秒是最主要的一段卡顿
@@ -12383,6 +12452,8 @@ let loginTypeTimer = 0;
 $('#loginName').addEventListener('input', () => {
   clearTimeout(loginTypeTimer);
   const n = normName($('#loginName').value);
+  const hint = $('#loginGuardHint');
+  if(hint) hint.classList.toggle('hidden', !(typeof ADMIN_NAME === 'string' && n === ADMIN_NAME));
   if(!n) return;
   loginTypeTimer = setTimeout(() => {
     try{
