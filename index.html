@@ -6426,13 +6426,24 @@ function setMeetSync(txt, warn){
 }
 function startSocialPoll(){
   if(socialPollTimer) return;
+  let tick = 0;
   socialPollTimer = setInterval(() => {
     if(document.hidden) return;
-    refreshSocialFromCloud(true);
-    msgPull().catch(() => {});        // 消息表：好友/管理员/群的新消息都从这里收
-    if(chatFriend || chatGroupId || chatAdminPeer) loadChat();
-  }, 10000);
+    tick++;
+    msgPull().catch(() => {});        // 消息表：好友申请 / 好友消息 / 管理员消息都从这里收
+    if(chatFriend || chatAdminPeer) loadChat();
+    // 整份档案较重，降频到 30 秒一次；新消息只靠轻量的消息表
+    if(tick % 8 === 0) refreshSocialFromCloud(true);
+  }, 4000);
 }
+/* 切回来、点窗口，立刻补收一次，不用等下一轮 */
+function kickMsgPull(){
+  if(!currentUser || cloudBlocked) return;
+  msgPull().catch(() => {});
+  refreshSocialFromCloud(true);
+}
+document.addEventListener('visibilitychange', () => { if(!document.hidden) kickMsgPull(); });
+window.addEventListener('focus', () => { if(!document.hidden) kickMsgPull(); });
 function stopSocialPoll(){
   if(socialPollTimer){ clearInterval(socialPollTimer); socialPollTimer = null; }
 }
@@ -8501,30 +8512,50 @@ function msgAckName(n){ return normName(n) || n; }
 function msgAcctKey(n){
   try{ return autoAcctKey(n) || ((n === currentUser) ? (writeKey || '') : '') || acctKeyGet(n) || ''; }catch(e){ return ''; }
 }
+/* 一个账号可能有多把可用凭据（当前口令 / 旧口令 / 内置免口令 / 本机缓存），
+   逐个试，避免「换过口令之后收不到消息」这种静默失败 */
+function msgKeysFor(n){
+  const keys = [];
+  const push = k => { if(k && keys.indexOf(k) < 0) keys.push(k); };
+  try{ if(normName(n) === normName(currentUser)) push(writeKey); }catch(e){}
+  push(autoAcctKey(n));
+  push(acctKeyGet(n));
+  push(acctOldFor(n));
+  return keys;
+}
 async function msgSend(to, kind, body){
   if(!to || !currentUser || to === currentUser) return false;
-  try{
-    await cloudReq('POST', '/rest/v1/rpc/sww_msg_send',
-      JSON.stringify({ p_from: currentUser, p_key: msgAcctKey(currentUser), p_to: to, p_kind: kind, p_body: body || {} }), null, 1);
-    return true;
-  }catch(e){
-    msgOutbox.push({ to: to, kind: kind, body: body || {} });
-    if(msgOutbox.length > 60) msgOutbox = msgOutbox.slice(-60);
-    return false;
+  const keys = msgKeysFor(currentUser);
+  for(const k of keys){
+    try{
+      await cloudReq('POST', '/rest/v1/rpc/sww_msg_send',
+        JSON.stringify({ p_from: currentUser, p_key: k, p_to: to, p_kind: kind, p_body: body || {} }), null, 1);
+      return true;
+    }catch(e){}
   }
+  msgOutbox.push({ to: to, kind: kind, body: body || {} });
+  if(msgOutbox.length > 60) msgOutbox = msgOutbox.slice(-60);
+  return false;
 }
 /* 拉取收件箱并并进本机：申请、同意、拒绝、群消息、私聊、管理员消息统一在这里落地 */
 async function msgPull(){
   if(!currentUser || cloudBlocked) return 0;
   const who = msgAckName(currentUser);
   const since = Number(localStorage.getItem(MSG_AT_KEY + who) || 0) || 0;
-  let rows = [];
-  try{
-    const txt = await cloudReq('POST', '/rest/v1/rpc/sww_msg_pull',
-      JSON.stringify({ p_user: currentUser, p_key: msgAcctKey(currentUser),
-        p_since: since ? new Date(since).toISOString() : null, p_limit: 200 }), null, 1);
-    rows = JSON.parse(txt || '[]');
-  }catch(e){ return 0; }
+  // 往前多取 5 分钟：两台设备时钟不齐也不会漏，重复的按 mid 去重
+  const sinceArg = since ? new Date(since - 300000).toISOString() : null;
+  let rows = [], pulled = false;
+  for(const k of msgKeysFor(currentUser)){
+    try{
+      const txt = await cloudReq('POST', '/rest/v1/rpc/sww_msg_pull',
+        JSON.stringify({ p_user: currentUser, p_key: k,
+          p_since: sinceArg, p_limit: 200 }), null, 1);
+      rows = JSON.parse(txt || '[]');
+      pulled = true;
+      break;
+    }catch(e){}
+  }
+  if(!pulled) return 0;
 
   const s = social();
   let applied = 0, maxAt = since;
