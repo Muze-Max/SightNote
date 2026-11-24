@@ -3123,6 +3123,86 @@ let cloudTimer = null;
 let cloudBlocked = false;      // 登录时云端不可用，暂停回写，避免覆盖云端
 let cloudRetryTimer = null;
 const CLOUD_PLAIN = 'SWP.';    // 不加密的云端记录前缀
+const CLOUD_GZ    = 'SWG.';    // 压缩后的云端记录前缀（gzip + base64，体积约 1/4）
+
+/* ---------- 云端档案压缩：省库容也省流量 ----------
+   一份 360 KB 的档案压完约 90 KB，base64 后 120 KB。
+   压不了（老浏览器）就退回明文，任何设备都能读。 */
+let gzState = 0;    // 0 未测 / 1 可用 / -1 不可用
+function u8ToB64(u8){
+  let out = '', step = 0x8000;
+  for(let i = 0; i < u8.length; i += step){
+    out += String.fromCharCode.apply(null, u8.subarray(i, i + step));
+  }
+  return btoa(out);
+}
+function b64ToU8(b64){
+  const s = atob(b64), u8 = new Uint8Array(s.length);
+  for(let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i);
+  return u8;
+}
+async function gzPack(str){
+  if(gzState === -1) return null;
+  try{
+    if(typeof CompressionStream !== 'function'){ gzState = -1; return null; }
+    const cs = new CompressionStream('gzip');
+    const buf = await new Response(new Blob([str]).stream().pipeThrough(cs)).arrayBuffer();
+    gzState = 1;
+    return u8ToB64(new Uint8Array(buf));
+  }catch(e){ gzState = -1; return null; }
+}
+async function gzUnpack(b64){
+  try{
+    if(typeof DecompressionStream !== 'function') return null;
+    const ds = new DecompressionStream('gzip');
+    const buf = await new Response(new Blob([b64ToU8(b64)]).stream().pipeThrough(ds)).arrayBuffer();
+    return new TextDecoder().decode(new Uint8Array(buf));
+  }catch(e){ return null; }
+}
+/* 写出去之前统一走这里：能压就压，压不了原样 */
+async function encodePayloadText(plain){
+  if(!plain) return plain;
+  if(typeof plain !== 'string') plain = String(plain);
+  if(plain.indexOf(CLOUD_GZ) === 0) return plain;
+  const gz = await gzPack(plain);
+  return gz ? (CLOUD_GZ + gz) : plain;
+}
+/* 读回来统一走这里：明文原样返回，压缩的解压，认不出的旧格式也原样交回 */
+async function decodePayload(payload){
+  if(!payload) return payload;
+  if(payload.indexOf(CLOUD_PLAIN) === 0) return payload;
+  if(payload.indexOf(CLOUD_GZ) === 0){
+    const plain = await gzUnpack(payload.slice(CLOUD_GZ.length));
+    if(plain) return plain;
+    throw new Error('这个浏览器不支持读取压缩档案，请用 Chrome / Edge 打开');
+  }
+  return payload;
+}
+
+/* ---------- 条件读：云端没变就不下载整份档案 ---------- */
+const CLOUD_AT_KEY = 'sww-cloud-at@';
+function cloudAtRaw(name){
+  try{ return localStorage.getItem(CLOUD_AT_KEY + (normName(name) || name)) || ''; }catch(e){ return ''; }
+}
+function cloudAtSet(name, at){
+  try{ localStorage.setItem(CLOUD_AT_KEY + (normName(name) || name), at || ''); }catch(e){}
+}
+function cloudChangedSince(at, name){
+  const c = cloudAtRaw(name);
+  if(!c || !at) return true;
+  const a = Date.parse(at), b = Date.parse(c);
+  if(!a || !b) return String(at) !== String(c);
+  return Math.abs(a - b) > 1200;
+}
+/* 只取一行的时间戳：几十字节，用来判断要不要下载整份档案 */
+async function cloudPeek(name){
+  const key = normName(name) || name;
+  const txt = await cloudReq('GET', '/rest/v1/shiwang_profiles?username=eq.' +
+    encodeURIComponent(key) + '&select=username,updated_at', null, null, 1);
+  let rows = [];
+  try{ rows = JSON.parse(txt || '[]'); }catch(e){ rows = []; }
+  return (rows && rows[0]) || null;
+}
 
 let currentUser = '';
 let renameHop = 0;
@@ -3456,35 +3536,57 @@ async function cloudPull(name, tries, keepTomb){
   let rows = [];
   try{ rows = JSON.parse(txt || '[]'); }catch(e){ rows = []; }
   const row = (rows && rows[0]) || null;
+  if(!row) return null;
+  if(row.payload) row.payload = await decodePayload(row.payload);   // 压缩档案在这里统一还原
+  if(row.updated_at) cloudAtSet(key, row.updated_at);
   // 已注销的账号：默认当作查不到；登录时要单独提示，所以允许把这行原样带出
-  if(row && !keepTomb && isRemovedRow(row)) return null;
+  if(!keepTomb && isRemovedRow(row)) return null;
+  pullCache[key] = { payload: row.payload, when: Date.now() };   // 同一次会话里再要旧版本就不用再下载
   return row;
 }
+
+/* 内存里最近一次下载/上传的云端副本，用来给「保存前备份旧版本」省钱省流量 */
+var pullCache = {};
 
 async function cloudPush(name, data){
   if(!name) return false;
   const key = normName(name) || name;
   const snap = data || ttSnapshot();
+  // 内容指纹没变就不再推整份档案：省流量、省额度，也不制造无意义的历史版本
+  const print = richPrint(snap);
+  if(!data && pushPrints[key] === print){ lastCloudSyncAt = Date.now(); return true; }
   try{
     const at = Date.now();
-    // 覆盖前先留一份旧记录在本机，防止误覆盖后无法回退
-    try{
-      const old = await cloudPull(key);
-      const oldFull = (old && old.payload) ? parseCloudEnvelope(old.payload) : null;
-      if(oldFull && oldFull.data && !isThinSnapshot(oldFull.data)){
-        localStorage.setItem(BAK_KEY + key, JSON.stringify({ at: oldFull.at || Date.now(), payload: old.payload }));
-        // 云端已有内容时，不允许用空数据覆盖
-        if(isThinSnapshot(snap)) return false;
-        // 覆盖前把旧版本存进云端历史，可随时回退
-        if(Date.now() - lastHistAt > 90000){
-          saveHistory(key, oldFull.at || Date.now(), old.payload);
-        }
+    // 覆盖前的「旧版本备份」优先用内存里刚下载过的副本，避免每次保存都再下一遍整份档案
+    let oldPayload = '';
+    const cached = pullCache[key];
+    if(cached && Date.now() - cached.when < 5 * 60 * 1000){
+      oldPayload = cached.payload;
+    }else if(!pushPrints[key]){
+      try{
+        const old = await cloudPull(key);
+        oldPayload = (old && old.payload) || '';
+      }catch(e){}
+    }
+    const oldFull = oldPayload ? parseCloudEnvelope(oldPayload) : null;
+    if(oldFull && oldFull.data && !isThinSnapshot(oldFull.data)){
+      // 云端已有内容时，不允许用空数据覆盖
+      if(isThinSnapshot(snap)) return false;
+      // 每 90 秒最多留一个回退点：本机备份 + 云端环形历史各一份
+      if(Date.now() - lastHistAt > 90000){
+        try{ localStorage.setItem(BAK_KEY + key, JSON.stringify({ at: oldFull.at || Date.now(), payload: oldPayload })); }catch(e){}
+        saveHistory(key, oldFull.at || Date.now(), oldPayload);
       }
-    }catch(e){ /* 备份失败不影响正常写入 */ }
+    }
     const payload = CLOUD_PLAIN + JSON.stringify({ v:1, name:key, at, data:snap });
+    const body = await encodePayloadText(payload);
+    const stamp = new Date(at).toISOString();
     await cloudReq('POST', '/rest/v1/shiwang_profiles',
-      JSON.stringify([{ username: key, payload, updated_at: new Date().toISOString() }]),
+      JSON.stringify([{ username: key, payload: body, updated_at: stamp }]),
       { Prefer: 'resolution=merge-duplicates,return=minimal' }, 2);
+    pushPrints[key] = print;
+    pullCache[key] = { payload: payload, when: Date.now() };
+    cloudAtSet(key, stamp);
     lastCloudSyncAt = at;
     return true;
   }catch(e){
@@ -3497,9 +3599,12 @@ async function cloudPutRaw(name, data){
   const key = normName(name) || name;
   const at = Date.now();
   const payload = CLOUD_PLAIN + JSON.stringify({ v: 1, name: key, at, data });
+  const body = await encodePayloadText(payload);
+  const stamp = new Date(at).toISOString();
   await cloudReq('POST', '/rest/v1/shiwang_profiles',
-    JSON.stringify([{ username: key, payload, updated_at: new Date().toISOString() }]),
+    JSON.stringify([{ username: key, payload: body, updated_at: stamp }]),
     { Prefer: 'resolution=merge-duplicates,return=minimal' }, 2);
+  cloudAtSet(key, stamp);
   return true;
 }
 
@@ -3518,25 +3623,21 @@ async function edgeDel(names){
 }
 
 /* 删掉一条云端记录（改名后释放旧名字用 / 安全员删用户）
-   顺序：① 有安全员口令时走 edge function 真删；② 退回网页直连 DELETE；③ 仍不行就写「注销标记」，
-   读的时候当作查不到。 */
+   顺序：① 有安全员口令时走 edge function 真删；② 走不了就写「注销标记」，
+   读的时候当作查不到。网页端不再直连 DELETE——那条路一律 401，白等十几秒。 */
 async function cloudDel(name, allowSoft){
   const key = normName(name) || name;
   if(!key) return false;
   if(await edgeDel([key])) return 'hard';
+  if(allowSoft === false) return false;
   try{
-    await cloudReq('DELETE', '/rest/v1/shiwang_profiles?username=eq.' + encodeURIComponent(key), null, { Prefer: 'return=minimal' }, 2);
-    return 'hard';
-  }catch(e){
-    if(allowSoft === false) return false;
-    try{
-      const payload = CLOUD_PLAIN + JSON.stringify({ v: 1, name: key, at: Date.now(), data: { __removed: true, __at: Date.now() } });
-      await cloudReq('POST', '/rest/v1/shiwang_profiles',
-        JSON.stringify([{ username: key, payload, updated_at: new Date().toISOString() }]),
-        { Prefer: 'resolution=merge-duplicates,return=minimal' }, 2);
-      return 'soft';
-    }catch(e2){ return false; }
-  }
+    const payload = CLOUD_PLAIN + JSON.stringify({ v: 1, name: key, at: Date.now(), data: { __removed: true, __at: Date.now() } });
+    const body = await encodePayloadText(payload);
+    await cloudReq('POST', '/rest/v1/shiwang_profiles',
+      JSON.stringify([{ username: key, payload: body, updated_at: new Date().toISOString() }]),
+      { Prefer: 'resolution=merge-duplicates,return=minimal' }, 2);
+    return 'soft';
+  }catch(e2){ return false; }
 }
 
 /* 这一行是不是「已注销」标记 */
@@ -3658,39 +3759,54 @@ function parseCloudEnvelope(payload){
   }catch(e){ return null; }
 }
 
-/* ---------- 云端历史版本：每次同步留一份，可回退 ---------- */
+/* ---------- 云端历史版本：固定两格轮流覆盖，可回退 ----------
+   旧版每同步一次就造一个 #H<时间戳> 新行，网页端删不掉，
+   结果一个号能攒十几行、每行都是一整份几百 KB——库容和带宽都被它吃掉。
+   现在固定用 #H1 / #H2 两个槽位轮流写：云端最多 2 份，不用删除，占用是常数。 */
 const HIST_MARK = '#H';
-const HIST_KEEP_MS = 24 * 60 * 60 * 1000;   // 云端版本只保留最近一天，过期自动清掉
-function histKey(name, at){ return (normName(name) || name) + HIST_MARK + at; }
+const HIST_MAX = 2;
+const HIST_KEEP_MS = 24 * 60 * 60 * 1000;   // 回退列表只展示最近一天的版本
+const HIST_IDX_KEY = 'sww-hist-idx@';
+function histBase(name){ return normName(name) || name; }
+function histKey(name, i){ return histBase(name) + HIST_MARK + (i + 1); }
+function nextHistSlot(name){
+  const base = histBase(name);
+  let i = 0;
+  try{ i = Number(JSON.parse(localStorage.getItem(HIST_IDX_KEY + base) || '0')) || 0; }catch(e){ i = 0; }
+  const idx = (i + 1) % HIST_MAX;
+  try{ localStorage.setItem(HIST_IDX_KEY + base, String(idx)); }catch(e){}
+  return histKey(base, idx);
+}
 let lastHistAt = 0;
 
-async function cloudHistory(name){
-  const key = normName(name) || name;
+async function cloudHistory(name, limit){
+  const base = histBase(name);
   try{
-    const txt = await cloudReq('GET', '/rest/v1/shiwang_profiles?username=like.' + encodeURIComponent(key + HIST_MARK + '*') + '&select=username,payload&order=username.desc', null, null, 2);
+    const txt = await cloudReq('GET', '/rest/v1/shiwang_profiles?username=like.' +
+      encodeURIComponent(base + HIST_MARK + '*') + '&select=username,payload,updated_at&order=updated_at.desc&limit=' + (limit || HIST_MAX),
+      null, null, 2);
     const rows = JSON.parse(txt || '[]');
-    return rows.map(r => {
-      const full = parseCloudEnvelope(r.payload);
-      return full ? { key: r.username, at: full.at, payload: r.payload, data: full.data } : null;
-    }).filter(Boolean).sort((a,b) => b.at - a.at);
+    const out = [];
+    for(const r of rows){
+      const p = await decodePayload(r.payload);
+      const full = parseCloudEnvelope(p);
+      if(full) out.push({ key: r.username, at: full.at, payload: p, data: full.data });
+    }
+    out.sort((a, b) => b.at - a.at);
+    return out;
   }catch(e){ return []; }
 }
 
 async function saveHistory(name, at, payload){
-  const key = normName(name) || name;
+  const base = histBase(name);
   if(!payload) return;
   try{
+    const slot = nextHistSlot(base);
+    const body = await encodePayloadText(payload);
     await cloudReq('POST', '/rest/v1/shiwang_profiles',
-      JSON.stringify([{ username: histKey(key, at), payload, updated_at: new Date().toISOString() }]),
+      JSON.stringify([{ username: slot, payload: body, updated_at: new Date().toISOString() }]),
       { Prefer: 'resolution=merge-duplicates,return=minimal' }, 2);
     lastHistAt = Date.now();
-    const rows = await cloudHistory(key);
-    const cutoff = Date.now() - HIST_KEEP_MS;
-    // 超过一天的版本、以及一天内第 9 条以后的，都从云端删掉
-    const extra = rows.filter((r, i) => r.at < cutoff || i >= 8);
-    for(const r of extra){
-      await cloudReq('DELETE', '/rest/v1/shiwang_profiles?username=eq.' + encodeURIComponent(r.key), null, null, 1);
-    }
   }catch(e){}
 }
 
@@ -4031,9 +4147,23 @@ async function reconcileNow(name, opts){
   opts = opts || {};
   if(!name) return false;
   const local = readProfile(name);
+  // 云端还是我们上次推上去的那版、本机内容也没动：什么都不用做，连整份档案都不用下载
+  try{
+    const peek = await cloudPeek(name);
+    if(peek && peek.updated_at && !cloudChangedSince(peek.updated_at, name) &&
+       local && pushPrints[loginKey(name)] === richPrint(local)) return false;
+  }catch(e){}
   let pulled = null;
   try{ pulled = await pullMerged(name, false); }catch(e){ return false; }
   const cloud = pulled && pulled.data ? pulled.data : null;
+  if(pulled && pulled.at) lastCloudSyncAt = Math.max(lastCloudSyncAt, pulled.at);
+  // 这个号在别处改了名：云端这行是「改名为 X」的指针，提示重新登录，不要拿它覆盖本机
+  const renamedTo = cloud ? renameTargetOf(cloud) : '';
+  if(renamedTo){
+    setSyncLine('这个账号已改名为「' + renamedTo + '」，重新登录即可');
+    if(opts.quiet !== true) toast('「' + name + '」已改名为「' + renamedTo + '」，请重新登录', 3500);
+    return false;
+  }
 
   if(!cloud){
     // 云端还没有这个号（或只有空壳）：把本机完整内容写上去
@@ -4080,17 +4210,11 @@ async function bgSyncOnce(){
   if(!currentUser || cloudBlocked || document.hidden) return;
   if(document.querySelector('.modal.show')) return;
   const name = currentUser;
+  // 先只问一句「云端变了没」：没变就直接返回，不再下载整份档案
   try{
-    const pulled = await pullMerged(name, false);
-    if(pulled && pulled.data){
-      const renamedTo = renameTargetOf(pulled.data);
-      if(renamedTo){
-        setSyncLine('这个账号已改名为「' + renamedTo + '」，重新登录即可');
-        toast('「' + name + '」已改名为「' + renamedTo + '」，请重新登录', 3500);
-        return;
-      }
-    }
-    lastCloudSyncAt = Math.max(lastCloudSyncAt, (pulled && pulled.at) || 0);
+    const peek = await cloudPeek(name);
+    if(peek && peek.updated_at && !cloudChangedSince(peek.updated_at, name)) return;
+    if(peek && peek.updated_at) cloudAtSet(name, peek.updated_at);
   }catch(e){ return; }
   try{ await reconcileNow(name, { quiet:false }); }catch(e){}
 }
@@ -4436,7 +4560,12 @@ async function restoreAuto(rec){
   if(!currentUser || !rec) return;
   try{
     const rows = await cloudHistory(currentUser);
-    const hit = rows.find(h => h.at === rec.at);
+    // 云端只留两格轮换，时间点可能被新版本顶掉：先精确找，找不到就取最接近的一份
+    let hit = rows.find(h => h.at === rec.at);
+    if(!hit){
+      const near = rows.slice().sort((a, b) => Math.abs(a.at - rec.at) - Math.abs(b.at - rec.at))[0];
+      if(near && Math.abs(near.at - rec.at) < 20 * 60 * 1000) hit = near;
+    }
     if(!hit){ toast('这条记录在云端找不到了'); return; }
     await saveHistory(currentUser, Date.now(), CLOUD_PLAIN + JSON.stringify({ v:1, name:currentUser, at:Date.now(), data:ttSnapshot() }));
     applySaved(hit.data);
@@ -4466,7 +4595,13 @@ async function autoSyncNow(manual){
   const d = touchDevice('sync');
   try{
     let pulled = null;
-    try{ pulled = await pullMerged(name); }catch(e){}
+    // 云端没变就别下载整份档案（这一条原来每次同步都要拉两三个历史版本，近 1 MB）
+    try{
+      const peek = await cloudPeek(name);
+      if(!peek || !peek.updated_at || cloudChangedSince(peek.updated_at, name)){
+        pulled = await pullMerged(name, false);
+      }
+    }catch(e){}
     if(pulled && pulled.data){
       const merged = mergeData(pulled.data, readProfile(name));
       applySaved(merged);
@@ -6529,7 +6664,7 @@ async function cloudUserList(){
   rows.forEach(r => {
     if(!r || typeof r.username !== 'string') return;
     if(r.username.indexOf('#') === 0) return;          // 突触映射 / 传信 / 讲解 这类系统行
-    if(/#H\d{6,}$/.test(r.username)){ hist++; histNames.push(r.username); return; } // 版本历史快照行，不算用户
+    if(/#H\d+$/.test(r.username)){ hist++; histNames.push(r.username); return; } // 版本历史快照行，不算用户
     if(String(r.updated_at || '').indexOf('1970-01-01') === 0) return;               // 改名指针行，不算一个号
     const name = r.username.replace(/\s+/g, ' ').trim();
     if(!name) return;
