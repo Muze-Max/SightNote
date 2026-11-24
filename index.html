@@ -6513,6 +6513,20 @@ function setSocialTab(tab){
 
 /* ---------- 管理员：与好友同级的独立栏 ---------- */
 let adminCodeCache = '';
+let adminUserCache = { at:0, list:[] };
+/* 拉一遍云端所有账号名（只读用户名，不下载档案），给「管理员下方」那份名单用 */
+async function adminUsersRefresh(force){
+  if(!force && Date.now() - adminUserCache.at < 20000 && adminUserCache.list.length) return null;
+  const txt = await cloudReq('GET', '/rest/v1/shiwang_profiles?select=username', null, null, 2);
+  const rows = JSON.parse(txt || '[]');
+  const adm = adminNameSafe();
+  const tomb = tombList();
+  const list = rows.map(r => r && r.username)
+    .filter(n => n && n.charAt(0) !== '#' && n !== adm && tomb.indexOf(n) < 0)
+    .sort((a, b) => String(a).localeCompare(String(b), 'zh-Hans-CN'));
+  adminUserCache = { at: Date.now(), list };
+  return list;
+}
 async function renderAdminPane(){
   const box = $('#adminChatList');
   if(!box) return;
@@ -6520,35 +6534,57 @@ async function renderAdminPane(){
   const s = social();
   // 管理员这栏：普通用户发来的消息（存在 adminChats，和好友聊天不交叉）
   if(isAdmin()){
-    if(line) line.textContent = '用户发来的工作消息';
+    if(line) line.textContent = '用户发来的工作消息 · 下方是所有普通账号，点任意一行就能直接发消息';
     renderEarth();
-    const names = Object.keys(s.adminChats || {}).filter(n => (s.adminChats[n] || []).length && n !== BROADCAST_NAME);
+    const s2 = social();
+    const adminChats = s2.adminChats || {};
+    const names = Object.keys(adminChats).filter(n => (adminChats[n] || []).length && n !== BROADCAST_NAME && n !== ADMIN_NAME);
     const hint = $('#adminHint');
     box.innerHTML = '';
-    // 飞信（全站传信）已经下线，这里不再显示那条固定置顶
 
-    if(!names.length){
-      if(hint) hint.style.display = 'none';
-      return;
+    // 第一行固定是「管理员」自己，下面才是所有普通账号
+    const meRow = document.createElement('div');
+    meRow.className = 'friend-row';
+    meRow.innerHTML =
+      '<span class="av">管</span>' +
+      '<span class="who"><span class="nm">管理员</span>' +
+        '<div class="sub">' + escapeHtml(displayName(currentUser) || currentUser) + ' · 系统身份</div></span>';
+    box.appendChild(meRow);
+
+    // 所有普通账号：先把有聊天记录的按时间排前面，其余按名字排在后面
+    const all = adminUserCache.list.slice();
+    const withChat = names.slice();
+    const rest = all.filter(n => withChat.indexOf(n) < 0);
+    const ordered = withChat.concat(rest);
+    if(!ordered.length){
+      const empty = document.createElement('div');
+      empty.className = 'sub';
+      empty.style.padding = '14px 6px';
+      empty.textContent = '正在读取账号列表…';
+      box.appendChild(empty);
     }
-    if(hint) hint.style.display = '';
-    names.sort((a, b) => {
-      const la = s.adminChats[a][s.adminChats[a].length - 1], lb = s.adminChats[b][s.adminChats[b].length - 1];
+    if(hint) hint.style.display = ordered.length ? '' : 'none';
+    withChat.sort((a, b) => {
+      const la = adminChats[a][adminChats[a].length - 1], lb = adminChats[b][adminChats[b].length - 1];
       return (lb.at || 0) - (la.at || 0);
-    }).forEach(n => {
-      const list = s.adminChats[n];
+    });
+    const shown = withChat.concat(rest);
+    shown.forEach(n => {
+      const list = adminChats[n] || [];
       const last = list[list.length - 1] || {};
-      const unread = (last.at || 0) > (Number(s.adminRead[n]) || 0) && last.from !== currentUser;
+      const unread = (last.at || 0) > (Number(s2.adminRead[n]) || 0) && last.from !== currentUser;
       const row = document.createElement('div');
       row.className = 'friend-row';
       row.innerHTML =
         '<span class="av">' + escapeHtml((displayName(n) || n).slice(0, 1)) + '</span>' +
         '<span class="who"><span class="nm">' + escapeHtml(displayName(n)) + '</span>' +
-          '<div class="sub">' + escapeHtml((last.from === currentUser ? '我：' : '') + (last.text || '[消息]').slice(0, 18)) + '</div></span>' +
+          '<div class="sub">' + escapeHtml(last.text ? ((last.from === currentUser ? '我：' : '') + last.text.slice(0, 18)) : '点开给 ta 发消息') + '</div></span>' +
         (unread ? '<span class="badge">新</span>' : '');
       row.addEventListener('click', () => openAdminChat(n));
       box.appendChild(row);
     });
+    // 后台刷新一次账号列表，拿到新注册的号再重画
+    adminUsersRefresh().then(list => { if(list) renderAdminPane(); }).catch(() => {});
     return;
   }
   // 普通用户：管理员栏就是和管理员聊天的入口，不显示任何可拉黑/删除的卡片
