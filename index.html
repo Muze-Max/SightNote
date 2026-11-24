@@ -1429,6 +1429,12 @@
     border:1px solid rgba(0,0,0,.12);background:var(--c);cursor:pointer;padding:0;
   }
   .cdot.on{box-shadow:0 0 0 2px #fff,0 0 0 3.5px var(--c);}
+  .bgdot{
+    height:16px;min-width:16px;border-radius:4px;flex:0 0 auto;
+    border:1px solid rgba(0,0,0,.12);background:var(--c);cursor:pointer;
+    font-size:9px;line-height:14px;color:#8a8a80;padding:0 3px;
+  }
+  .bgdot.on{box-shadow:0 0 0 2px #fff,0 0 0 3.5px #b9c6bf;}
   .annot-sep{width:1px;height:14px;background:var(--line);flex:0 0 1px;margin:0 2px;}
   .abtn{
     border:1px solid var(--line);background:#fff;color:var(--soft);
@@ -1437,13 +1443,14 @@
   .abtn.on{background:#fdecec;border-color:#f0bcbc;color:#b03a2e;}
   .annot-size{font-size:10.5px;color:var(--faint);min-width:18px;text-align:center;}
   .annot-body{position:relative;flex:1 1 auto;min-height:0;}
-  .annot textarea{
+  .annot-text{
     position:absolute;inset:0;width:100%;height:100%;
-    border:0;outline:none;resize:none;padding:11px 13px;
+    border:0;outline:none;padding:11px 13px;overflow-y:auto;
     font-family:inherit;line-height:1.55;background:#fff;
-    color:var(--ink);font-size:16px;
+    color:var(--ink);font-size:16px;white-space:pre-wrap;word-break:break-word;
   }
-  .annot textarea.hidden{display:none !important;}
+  .annot-text:empty::before{content:attr(data-ph);color:#b9bdb6;}
+  .annot-text.hidden{display:none !important;}
   .annot canvas{
     position:absolute;inset:0;width:100%;height:100%;display:block;
     touch-action:none;cursor:crosshair;background:#fff;
@@ -2160,11 +2167,16 @@
     <span class="annot-size" id="sizeNow">16</span>
     <button type="button" class="abtn" id="sizePlus" title="增大字号">A+</button>
     <span class="annot-sep"></span>
+    <button type="button" class="bgdot on" data-bg="" style="--c:#ffffff" title="无底色">无</button>
+    <button type="button" class="bgdot" data-bg="#fff3bf" style="--c:#fff3bf" title="黄色底色"></button>
+    <button type="button" class="bgdot" data-bg="#d8ecff" style="--c:#d8ecff" title="蓝色底色"></button>
+    <button type="button" class="bgdot" data-bg="#ffd9d6" style="--c:#ffd9d6" title="红色底色"></button>
+    <span class="annot-sep"></span>
     <button type="button" class="abtn" id="eraserBtn" title="橡皮擦">橡皮</button>
     <button type="button" class="abtn" id="clearAnnot" title="清空这条批注">清空</button>
   </div>
   <div class="annot-body" id="annotBody">
-    <textarea id="annotText" placeholder="写点批注…" spellcheck="false"></textarea>
+    <div id="annotText" class="annot-text" contenteditable="true" data-ph="写点批注…" spellcheck="false"></div>
     <canvas id="annotCanvas" class="hidden"></canvas>
   </div>
   <div class="annot-resize" id="annotResize" title="拖动调整大小"></div>
@@ -2540,6 +2552,10 @@
       <button class="close-x" id="closeSharePick" aria-label="关闭">×</button>
     </div>
     <div class="sheet-body">
+      <label id="shareAnnotRow" style="display:flex;align-items:center;gap:8px;margin:-4px 0 12px;font-size:12px;color:#5a6472;cursor:pointer;">
+        <input type="checkbox" id="shareWithAnnot" style="width:15px;height:15px;accent-color:#2f7d5d;">
+        <span>同时分享这些词的「笔」批注（打字与手写）</span>
+      </label>
       <div class="transit-sets" id="sharePickList"></div>
     </div>
   </div>
@@ -8899,6 +8915,22 @@ function takeShare(m, btn){
       builtin: false
     });
     state.enabled[id] = true;
+    // 批注一起收下：只补对方有、自己还没有的词，不覆盖自己的笔记
+    if(sh.annots && typeof sh.annots === 'object'){
+      let n = 0;
+      Object.keys(sh.annots).forEach(k => {
+        const a = sh.annots[k];
+        if(!k || !a || state.annotations[k]) return;
+        state.annotations[k] = {
+          text: String(a.text || ''), html: String(a.html || ''), size: a.size || 16,
+          color: a.color || '#23231f',
+          strokes: Array.isArray(a.strokes) ? a.strokes : [],
+          updatedAt: Number(a.updatedAt) || Date.now()
+        };
+        n++;
+      });
+      if(n) toast('同时收下 ' + n + ' 条批注');
+    }
     toast('已收进知识库：' + sh.name);
   }else{
     const list = (sh.list === 'known') ? state.known : state.unknown;
@@ -8923,8 +8955,18 @@ function openSharePick(kind){
   if(!chatFriend && !chatGroupId && !chatAdminPeer) return;
   shareKind = kind;
   $('#sharePickTitle').textContent = kind === 'set' ? '选择要分享的知识库' : '选择要分享的记忆库';
+  // 批注只跟着知识库走：记忆库里的词本来就有各自的批注在本人账号里
+  const row = $('#shareAnnotRow');
+  if(row) row.style.display = kind === 'set' ? '' : 'none';
+  if(kind === 'set'){ const cb = $('#shareWithAnnot'); if(cb) cb.checked = false; }
   const box = $('#sharePickList');
   box.innerHTML = '';
+  const ann = (it) => {
+    const rec = state.annotations && state.annotations[keyOf(it)];
+    return rec ? { text: rec.text || '', html: rec.html || '', size: rec.size || 16, color: rec.color || '#23231f',
+                   strokes: Array.isArray(rec.strokes) ? rec.strokes : [], updatedAt: rec.updatedAt || 0 } : null;
+  };
+  const withAnnot = () => !!(kind === 'set' && $('#shareWithAnnot') && $('#shareWithAnnot').checked);
   if(kind === 'set'){
     const sets = allSets();
     if(!sets.length){ box.innerHTML = '<div class="transit-empty">还没有知识库</div>'; }
@@ -8934,7 +8976,18 @@ function openSharePick(kind){
       row.innerHTML = '<span class="ck"></span><span class="nm">' + escapeHtml(s.name) + '</span>' +
         '<span class="ct">' + s.items.length + ' 条</span>';
       row.addEventListener('click', () => {
-        sendShare({ kind:'set', name:s.name, desc:s.desc || '', items:s.items.map(it => Object.assign({}, it)) });
+        const sh = { kind:'set', name:s.name, desc:s.desc || '', items:s.items.map(it => Object.assign({}, it)) };
+        if(withAnnot()){
+          const annots = {};
+          let n = 0;
+          s.items.forEach(it => {
+            const a = ann(it);
+            if(a){ annots[keyOf(it)] = a; n++; }
+          });
+          if(n){ sh.annots = annots; toast('随分享带上 ' + n + ' 条批注'); }
+          else toast('这个知识库里还没有批注');
+        }
+        sendShare(sh);
         closeSharePick();
       });
       box.appendChild(row);
@@ -10383,12 +10436,62 @@ function annotDrawAll(){
   if(annotCur) annotStroke(annotCur);
 }
 
+/* —— 富文本：只允许颜色与底色，其它标签一律拆掉 —— */
+function annotSanitize(html){
+  const box = document.createElement('div');
+  box.innerHTML = String(html || '');
+  const keep = { SPAN:1, BR:1, DIV:1, P:1, B:1, I:1, U:1 };
+  const walk = (node) => {
+    Array.prototype.slice.call(node.childNodes).forEach(n => {
+      if(n.nodeType === 3) return;
+      if(n.nodeType !== 1){ n.parentNode && n.parentNode.removeChild(n); return; }
+      if(!keep[n.tagName]){
+        const frag = document.createDocumentFragment();
+        while(n.firstChild) frag.appendChild(n.firstChild);
+        n.parentNode.replaceChild(frag, n);
+        return;
+      }
+      const s = n.getAttribute('style') || '';
+      const color = (s.match(/color:\s*([^;]+)/i) || [])[1] || '';
+      const bg = (s.match(/background-color:\s*([^;]+)/i) || [])[1] || '';
+      Array.prototype.slice.call(n.attributes).forEach(a => n.removeAttribute(a.name));
+      const st = [];
+      if(color && /^[#\w(),.%\s-]+$/.test(color)) st.push('color:' + color.trim());
+      if(bg && /^[#\w(),.%\s-]+$/.test(bg) && bg.trim() !== 'transparent') st.push('background-color:' + bg.trim());
+      if(st.length) n.setAttribute('style', st.join(';'));
+      walk(n);
+    });
+  };
+  walk(box);
+  return box.innerHTML;
+}
+function annotPlain(){
+  return String(annotTextEl.innerText || '').replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+}
+function annotEsc(s){
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+/* 选中文字后改颜色 / 底色；没有选中就当作「接下来打的字用什么颜色」 */
+function annotApplyToSelection(kind, value){
+  const sel = window.getSelection ? window.getSelection() : null;
+  if(!sel || !sel.rangeCount || sel.isCollapsed) return false;
+  const r = sel.getRangeAt(0);
+  if(!r || !annotTextEl.contains(r.commonAncestorContainer)) return false;
+  try{
+    document.execCommand('styleWithCSS', false, true);
+    if(kind === 'bg') document.execCommand('hiliteColor', false, value || 'transparent');
+    else document.execCommand('foreColor', false, value);
+  }catch(e){ return false; }
+  annotQueueSave();
+  return true;
+}
 /* —— 保存 —— */
 function annotSave(skipRender){
   if(!annotKey) return;
-  const text = annotTextEl.value;
+  const html = annotSanitize(annotTextEl.innerHTML);
+  const text = annotPlain();
   const hasInk = annotStrokes.length > 0;
-  const has = (text && text.trim()) || hasInk;
+  const has = text || hasInk;
   const old = state.annotations[annotKey];
   if(!has){
     if(old){ delete state.annotations[annotKey]; save(); }
@@ -10397,6 +10500,7 @@ function annotSave(skipRender){
   }
   state.annotations[annotKey] = {
     text: text,
+    html: html,
     size: annotSize,
     color: annotColor,
     strokes: annotStrokes.map(s => ({
@@ -10437,7 +10541,9 @@ function openAnnot(item, el){
   const rec = annotRec(annotKey);
   annotStrokes = rec && Array.isArray(rec.strokes) ? JSON.parse(JSON.stringify(rec.strokes)) : [];
   annotCur = null;
-  annotTextEl.value = rec && typeof rec.text === 'string' ? rec.text : '';
+  annotTextEl.innerHTML = rec
+    ? (rec.html ? annotSanitize(rec.html) : annotEsc(rec.text || '').replace(/\n/g, '<br>'))
+    : '';
   annotSize = rec && rec.size ? Math.min(32, Math.max(12, rec.size)) : 16;
   annotColor = rec && rec.color ? rec.color : '#23231f';
   annotErase = false;
@@ -10499,12 +10605,23 @@ $('.annot-tabs').querySelectorAll('.annot-tab').forEach(t => {
   });
 });
 
-/* 颜色 */
+/* 颜色：先看有没有选中文字，选中就改那段，没选就改默认字色 */
 annotPanel.querySelectorAll('.cdot').forEach(d => {
   d.addEventListener('click', () => {
     annotColor = d.dataset.color;
-    annotSyncUI();
-    annotSave(true);
+    annotPanel.querySelectorAll('.cdot').forEach(x => x.classList.toggle('on', x === d));
+    if(!annotApplyToSelection('color', annotColor)){
+      annotTextEl.style.color = annotColor;
+      annotSyncUI();
+    }
+  });
+});
+/* 底色：只作用于选中的那段文字 */
+annotPanel.querySelectorAll('.bgdot').forEach(d => {
+  d.addEventListener('click', () => {
+    const v = d.dataset.bg || '';
+    if(!annotApplyToSelection('bg', v)){ toast('先选中一段文字，再点底色'); return; }
+    annotPanel.querySelectorAll('.bgdot').forEach(x => x.classList.toggle('on', x === d));
   });
 });
 
@@ -10526,23 +10643,34 @@ $('#eraserBtn').addEventListener('click', () => {
   annotSyncUI();
 });
 
-/* 清空 */
+/* 清空：只清当前这一栏，打字和手写互不影响 */
 $('#clearAnnot').addEventListener('click', () => {
-  annotTextEl.value = '';
-  annotStrokes = [];
-  annotCur = null;
-  annotDrawAll();
+  if(annotTab === 'draw'){
+    annotStrokes = [];
+    annotCur = null;
+    annotDrawAll();
+    annotSyncUI();
+    annotSave(true);
+    toast('已清空手写');
+    return;
+  }
+  annotTextEl.innerHTML = '';
   annotSyncUI();
   annotSave(true);
-  if(annotKey) delete state.annotations[annotKey];
-  save();
-  renderPage();
-  toast('已清空这条批注');
+  toast('已清空打字');
 });
 
 /* 文本输入 */
 annotTextEl.addEventListener('input', annotQueueSave);
 annotTextEl.addEventListener('blur', () => annotSave(true));
+/* 粘贴只取纯文字，别把外部的字体和排版一起带进来 */
+annotTextEl.addEventListener('paste', (e) => {
+  try{
+    e.preventDefault();
+    const t = (e.clipboardData || window.clipboardData).getData('text/plain');
+    document.execCommand('insertText', false, t);
+  }catch(_){}
+});
 
 /* —— 手写（兼容 Apple Pencil / 鼠标 / 手指） —— */
 function annotPt(e){
