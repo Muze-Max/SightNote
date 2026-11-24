@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 朗读音频来自第三方发音接口，它只接受「不带来源页」的请求，所以整页统一不发 Referer -->
+<meta name="referrer" content="no-referrer">
 <title>SightNote · 视网速记</title>
 <!--
   ================= 视网速记 · 单文件源码说明 =================
@@ -7640,18 +7642,54 @@ function doSpeakNow(t, lang){
   }, 900);
 }
 /* 兜底朗读：浏览器没有 Web Speech（微信内置浏览器 / 各种 WebView 常常不支持），
-   或者系统里没装这门语言的发音包时，直接播放有道词典的发音音频。
+   或者系统里没装这门语言的发音包时，直接播放在线发音音频。
+   - 单个英文词走有道（发音最准，一个词一条）；
+   - 词组 / 整句走百度翻译发音（有道对带空格的整句会返回 500，读不出来）；
+   - 太长的句子按标点切段依次播放，不会只读前半截。
    同一段文字只下载一次，第二次点击立刻出声。 */
 let ttsAudio = null;
 const ttsCache = new Map();          // text|lang -> HTMLAudioElement（已预取）
 let audioUnlocked = false;
+const TTS_CHUNK = 150;               // 单次请求的字数上限
 function ttsUrl(t, lang){
-  const lg = lang || detectLang(t);
-  const q = lg.indexOf('en') === 0 ? ('?type=2&audio=' + encodeURIComponent(t))
-          : lg.indexOf('ja') === 0 ? ('?le=ja&audio=' + encodeURIComponent(t))
-          : lg.indexOf('ko') === 0 ? ('?le=ko&audio=' + encodeURIComponent(t))
-          : ('?le=zh&audio=' + encodeURIComponent(t));
-  return 'https://dict.youdao.com/dictvoice' + q;
+  const txt = String(t || '').trim();
+  const lg = lang || detectLang(txt);
+  const isEn = lg.indexOf('en') === 0;
+  if(isEn && !/\s/.test(txt) && txt.length <= 40){
+    return 'https://dict.youdao.com/dictvoice?type=2&audio=' + encodeURIComponent(txt);
+  }
+  const lan = isEn ? 'en' : (lg.indexOf('ja') === 0 ? 'jp' : (lg.indexOf('ko') === 0 ? 'kor' : 'zh'));
+  return 'https://fanyi.baidu.com/gettts?lan=' + lan + '&text=' + encodeURIComponent(txt) + '&spd=3&source=web';
+}
+/* 超长文本按句号 / 问号 / 分号切开，再贪心合并成不超过 TTS_CHUNK 的块 */
+function speechChunks(t){
+  const s = String(t || '').replace(/\s+/g, ' ').trim();
+  if(!s) return [];
+  if(s.length <= TTS_CHUNK) return [s];
+  const parts = s.match(/[^.!?。！？;；\n]+[.!?。！？;；]?/g) || [s];
+  const out = [];
+  let cur = '';
+  parts.forEach(p => {
+    p = p.trim();
+    if(!p) return;
+    if(p.length > TTS_CHUNK){
+      if(cur){ out.push(cur); cur = ''; }
+      // 单句还是太长：按空格切成小段
+      let rest = p;
+      while(rest.length > TTS_CHUNK){
+        let cut = rest.lastIndexOf(' ', TTS_CHUNK);
+        if(cut < 30) cut = TTS_CHUNK;
+        out.push(rest.slice(0, cut).trim());
+        rest = rest.slice(cut).trim();
+      }
+      if(rest) out.push(rest);
+      return;
+    }
+    if((cur + ' ' + p).trim().length > TTS_CHUNK){ out.push(cur); cur = p; }
+    else cur = (cur ? cur + ' ' : '') + p;
+  });
+  if(cur) out.push(cur);
+  return out;
 }
 function prefetchTTS(t, lang){
   const text = String(t || '').trim();
@@ -7680,27 +7718,66 @@ function unlockAudio(){
   }catch(e){}
   try{ refreshVoices(); }catch(e){}
 }
+/* 分块队列：一句一段播完自动接下一段 */
+let ttsQueue = [];
+let ttsGen = 0;
+function isEnText(s){ return detectLang(s).indexOf('en') === 0; }
 function playTTS(t, lang){
   const text = String(t || '').trim();
   if(!text) return;
   const lg = lang || detectLang(text);
   unlockAudio();
-  try{
-    if(ttsAudio){ try{ ttsAudio.pause(); }catch(e){} }
-    let a = ttsCache.get(text + '|' + lg) || prefetchTTS(text, lg);
-    if(!a){ toast('朗读失败：请检查网络，或在浏览器里打开这个链接'); return; }
-    ttsAudio = a;
-    try{ a.currentTime = 0; }catch(e){}
-    const p = a.play();
-    if(p && p.catch) p.catch(() => {
-      // 微信里偶发被拦：重设一次 src 再播，成功率更高
+  const chunks = speechChunks(text);
+  if(!chunks.length) return;
+  ttsGen++;
+  const gen = ttsGen;
+  if(ttsAudio){ try{ ttsAudio.pause(); }catch(e){} }
+  ttsQueue = chunks;
+  playChunk(gen, lg, 0);
+}
+function playChunk(gen, lg, tries){
+  if(gen !== ttsGen) return;                   // 已经被新的朗读请求接管
+  const text = ttsQueue[0];
+  if(!text){ ttsQueue = []; return; }
+  let a = ttsCache.get(text + '|' + lg) || prefetchTTS(text, lg);
+  if(!a){ ttsQueue.shift(); return playChunk(gen, lg, 0); }
+  ttsAudio = a;
+  let phase = tries || 0;
+  let fired = false;
+  const fail = () => {
+    if(gen !== ttsGen || fired) return;
+    fired = true;
+    if(phase === 0){
+      // 第一层兜底：换一条带时间戳的地址重取一次（微信偶发拦截 / 缓存坏包）
+      phase = 1;
+      setTimeout(() => { fired = false; }, 60);   // 同一次失败可能触发 onerror + play 拒绝，隔开一点
       try{
         a.src = ttsUrl(text, lg) + '&t=' + Date.now();
-        const p2 = a.play();
-        if(p2 && p2.catch) p2.catch(() => toast('朗读失败：请检查网络，或在浏览器里打开这个链接'));
-      }catch(e){ toast('朗读失败：请检查网络，或在浏览器里打开这个链接'); }
-    });
-  }catch(e){ toast('朗读失败：请检查网络，或在浏览器里打开这个链接'); }
+        const p = a.play();
+        if(p && p.catch) p.catch(() => setTimeout(fail, 90));
+        return;
+      }catch(e){ /* 继续往下兜底 */ }
+    }
+    if(gen !== ttsGen) return;
+    // 第二层兜底：整句音频取不到，就按单词逐个读，至少把这句话读完
+    if(isEnText(text) && /\s/.test(text)){
+      const words = text.split(/\s+/).filter(Boolean);
+      if(words.length > 1 && words.length <= 24){
+        ttsQueue.splice(0, 1, ...words);
+        playChunk(gen, lg, 1);      // 拆出来的词不再重试，直接播
+        return;
+      }
+    }
+    ttsQueue.shift();
+    playChunk(gen, lg, 0);
+  };
+  a.onended = () => { if(gen !== ttsGen) return; ttsQueue.shift(); playChunk(gen, lg, 0); };
+  a.onerror = () => fail();
+  try{ a.currentTime = 0; }catch(e){}
+  try{
+    const p = a.play();
+    if(p && p.catch) p.catch(() => fail());
+  }catch(e){ fail(); }
 }
 function speakWord(txt){
   const t = String(txt || '').trim();
@@ -7710,17 +7787,9 @@ function speakWord(txt){
   if(!canSpeech){ playTTS(t, lang); return; }
   const synth = window.speechSynthesis;
   try{ if(synth.cancel) synth.cancel(); }catch(e){}
-  // 语音包已经就绪：立刻发音，不再等
-  if(pickVoice(lang)){ doSpeakNow(t, lang); return; }
-  // 引擎首次加载：最多等 150ms，超时就用联网音频，避免点了半天没声音
-  let fired = false;
-  const fire = () => {
-    if(fired) return; fired = true;
-    if(pickVoice(lang)) doSpeakNow(t, lang);
-    else playTTS(t, lang);
-  };
-  try{ synth.addEventListener('voiceschanged', fire, { once:true }); }catch(e){}
-  setTimeout(fire, 150);
+  // 不再要求「必须装了这个语言的语音包」：中文手机常常只有普通话包，
+  // 但引擎照样能用默认嗓把英文读出来；真的没起声会在 900ms 后自动换联网音频
+  doSpeakNow(t, lang);
 }
 
 /* 页面上所有「① 内容」都挂 data-say：点一下就朗读，不用先打开释义卡。
@@ -8523,7 +8592,7 @@ function renderSetView(){
     row.innerHTML =
       (setSelOn ? '<label class="sel"><input type="checkbox" data-sel="' + idx + '"' + (picked ? ' checked' : '') + '></label>' : '') +
       '<div class="en" data-say="' + escapeHtml(it.en) + '" title="点一下朗读">' + escapeHtml(it.en) + '</div>' +
-      '<div class="zh">' + escapeHtml(it.zh || '') +
+      '<div class="zh"' + (it.zh ? ' data-say="' + escapeHtml(it.zh) + '" title="点一下朗读释义"' : '') + '>' + escapeHtml(it.zh || '') +
         (it.pos ? '<div class="si-meta">' + escapeHtml(it.pos) + '</div>' : '') +
         (it.root ? '<div class="si-meta">' + escapeHtml(it.root) + '</div>' : '') +
       '</div>' +
@@ -9805,17 +9874,27 @@ function showCard(el, item){
   cardPos.textContent = item.pos || '';
   cardPos.style.display = item.pos ? '' : 'none';
   cardMean.textContent = item.zh || '（暂无释义）';
+  // 释义、词根也点一下就能读（中文用中文发音）
+  if(item.zh && item.zh !== '（暂无释义）') cardMean.setAttribute('data-say', item.zh);
+  else cardMean.removeAttribute('data-say');
   if(item.root){
     cardRoot.textContent = item.root;
+    cardRoot.setAttribute('data-say', item.root);
     cardRoot.style.display = '';
   }else{
+    cardRoot.removeAttribute('data-say');
     cardRoot.style.display = 'none';
   }
   cardActs.style.display = (item.type === 'sentence' && !item.zh) ? 'none' : '';
 
   card.classList.add('show');
   // 顺手把这条的联网发音预取下来：点了喇叭就是秒出
-  try{ prefetchTTS(item.en); }catch(e){}  const wr = el.getBoundingClientRect();
+  try{
+    const c0 = speechChunks(item.en || '');
+    if(c0[0]) prefetchTTS(c0[0]);
+    if(c0[1]) prefetchTTS(c0[1]);
+  }catch(e){}
+  const wr = el.getBoundingClientRect();
   const cr = card.getBoundingClientRect();
   const gap = 9;
   let left = wr.left + wr.width/2 - cr.width/2;
@@ -10190,7 +10269,7 @@ function openList(mode){
       const row = document.createElement('div');
       row.className = 'row-item';
       row.innerHTML = '<div class="en" data-say="' + escapeHtml(it.en) + '" title="点一下朗读">' + escapeHtml(it.en) + '</div>' +
-        '<div class="zh">' + (it.pos ? '<i style="color:#9aa79f;font-style:italic;font-size:11px;">' + escapeHtml(it.pos) + '</i> ' : '') +
+        '<div class="zh"' + (it.zh ? ' data-say="' + escapeHtml(it.zh) + '" title="点一下朗读释义"' : '') + '>' + (it.pos ? '<i style="color:#9aa79f;font-style:italic;font-size:11px;">' + escapeHtml(it.pos) + '</i> ' : '') +
         escapeHtml(it.zh || '') + '</div>' +
         '<button class="rm" title="移出">×</button>';
       row.querySelector('.rm').addEventListener('click', () => {
@@ -10526,7 +10605,7 @@ function showPreview(items, source){
     const row = document.createElement('div');
     row.className = 'prow';
     row.innerHTML = '<div class="p-en" data-say="' + escapeHtml(it.en) + '" title="点一下朗读">' + escapeHtml(it.en) + (it.pos ? ' <span style="color:#a9b6ad;font-style:italic;">' + escapeHtml(it.pos) + '</span>' : '') + '</div>' +
-      '<div class="p-zh">' + escapeHtml(it.zh) + '</div>' +
+      '<div class="p-zh"' + (it.zh ? ' data-say="' + escapeHtml(it.zh) + '" title="点一下朗读释义"' : '') + '>' + escapeHtml(it.zh) + '</div>' +
       (it.root ? '<div class="p-zh" style="color:#a9a9a0;font-size:11px;">' + escapeHtml(it.root) + '</div>' : '');
     frag.appendChild(row);
   });
