@@ -1739,7 +1739,7 @@
       <div class="setting-row">
         <div>
           知识锁
-          <div class="desc">开启后，登录这个用户名要先输入密码</div>
+          <div class="desc">开启后，登录这个用户名要先输入密码；「木泽」改这项必须先过管理员口令</div>
         </div>
         <button class="switch" id="lockSwitch" aria-label="知识锁"></button>
       </div>
@@ -12427,6 +12427,12 @@ $('#lockPass2').addEventListener('keydown', e => { if(e.key === 'Enter') $('#loc
 
 $('#lockSwitch').addEventListener('click', async () => {
   if(!currentUser) return;
+  // 「木泽」的知识锁是关键关卡：开启 / 关闭 / 换密码都必须先过管理员口令，
+  // 只拿到登录态（或在别的设备上蹭到会话）改不了它。
+  if(currentUser === ADMIN_NAME && !(await requireAdminPass())){
+    toast('需要管理员口令才能修改「木泽」的知识锁');
+    return;
+  }
   const m = metaEnsure();
   m.lock = m.lock || { on:false, hash:'' };
   if(!m.lock.on){
