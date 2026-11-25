@@ -786,10 +786,28 @@
   }
   .batch-bar.hidden{display:none;}
   .set-sticky{position:sticky;top:0;z-index:4;background:var(--paper);padding:2px 0 4px;margin-bottom:2px;}
-  #setSticky.collapsed .field-line,
-  #setSticky.collapsed .set-tools,
-  #setSticky.collapsed .cat-tools{display:none !important;}
+  #setSticky.collapsed .fold-body{display:none !important;}
   #setSticky.collapsed .list-head{margin-bottom:4px;}
+  .fold-arrow{
+    display:none;flex:0 0 auto;width:24px;height:24px;padding:0;margin:0 2px 0 0;
+    border:1px solid var(--line,#d9d4c9);border-radius:7px;background:var(--paper,#fbf9f4);
+    color:var(--ink,#2b2b2b);font-size:13px;line-height:22px;text-align:center;cursor:pointer;
+  }
+  #setSticky.collapsed .fold-arrow{display:inline-block;}
+  #setSticky.peek .fold-arrow{transform:rotate(180deg);}
+  #setSticky .list-head{justify-content:flex-start;gap:6px;}
+  #setSticky #setCount{margin-left:auto;}
+  #setSticky.peek .fold-body{
+    display:flex;align-items:center;gap:6px;flex-wrap:nowrap;
+    overflow-x:auto;overflow-y:hidden;padding:2px 0 6px;-webkit-overflow-scrolling:touch;
+    scrollbar-width:thin;
+  }
+  #setSticky.peek .fold-body .field-line{flex:0 0 150px;margin:0 !important;}
+  #setSticky.peek .fold-body .set-tools,
+  #setSticky.peek .fold-body .cat-tools{display:flex;flex-wrap:nowrap;gap:6px;}
+  #setSticky.peek .fold-body .set-tools .btn-line,
+  #setSticky.peek .fold-body .cat-tools .btn-line{white-space:nowrap;flex:0 0 auto;}
+  #setSticky.peek .fold-body .batch-bar{flex:0 0 auto;}
   #setSticky.collapsed{cursor:pointer;}
   .drop-before{box-shadow:inset 0 3px 0 #2f7d5d;}
   .drop-after{box-shadow:inset 0 -3px 0 #2f7d5d;}
@@ -1926,9 +1944,11 @@
   <div class="list-wrap">
     <div class="set-sticky" id="setSticky">
     <div class="list-head">
+      <button class="fold-arrow" id="foldArrow" aria-label="展开工具">▾</button>
       <h2 id="setTitle">知识库</h2>
       <span class="cnt" id="setCount"></span>
     </div>
+    <div class="fold-body" id="foldBody">
     <div class="field-line" style="margin-bottom:10px;"><input id="setSearch" placeholder="在本知识库中搜索"></div>
     <div class="set-tools">
       <button class="btn-line" id="addItem">＋ 添加词条</button>
@@ -1948,6 +1968,7 @@
     </div>
     <div class="cat-tools">
       <button class="btn-line" id="newCat">＋ 新建分类</button>
+    </div>
     </div>
     </div>
     <div id="setRows"></div>
@@ -9973,7 +9994,7 @@ function openSetManager(id){
   manageSetId = id;
   $('#setSearch').value = '';
   const sticky0 = $('#setSticky');
-  if(sticky0) sticky0.classList.remove('collapsed');
+  if(sticky0){ sticky0.classList.remove('collapsed'); sticky0.classList.remove('peek'); }
   const wrap0 = document.querySelector('#viewSet .list-wrap');
   if(wrap0) wrap0.scrollTop = 0;
   renderSetView();
@@ -13242,13 +13263,23 @@ $('#backMenu').addEventListener('click', () => {
     const st = wrap.scrollTop;
     if(setSelOn){ sticky.classList.remove('collapsed'); lastTop = st; return; }
     if(st > 96 && st > lastTop + 2) sticky.classList.add('collapsed');
-    if(st < 28) sticky.classList.remove('collapsed');
+    if(st < 28){ sticky.classList.remove('collapsed'); sticky.classList.remove('peek'); }
     lastTop = st;
   }, { passive: true });
+  const arrow = $('#foldArrow');
+  if(arrow) arrow.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const sticky = $('#setSticky');
+    if(!sticky) return;
+    sticky.classList.toggle('peek');
+  });
   document.addEventListener('click', (e) => {
     const sticky = $('#setSticky');
     if(!sticky || !sticky.classList.contains('collapsed')) return;
-    if(e.target.closest('#setSticky')) sticky.classList.remove('collapsed');
+    if(e.target.closest('#setTitle') || e.target.closest('#setCount')){
+      sticky.classList.remove('collapsed');
+      sticky.classList.remove('peek');
+    }
   });
 })();
 
