@@ -9942,7 +9942,7 @@ function ensureCats(set){
   return set.cats;
 }
 $('#newCat').addEventListener('click', () => {
-  const set = getSetById(manageSetId);
+  const set = editableSetById(manageSetId);
   if(!set) return;
   const name = prompt('新分类的名称（如：螨类）', '');
   if(name == null) return;
@@ -9969,7 +9969,6 @@ function openCatMerge(catId){
   top.value = '';
   top.textContent = '（顶层：只移动，不合并）';
   sel.appendChild(top);
-  catKidsMap(set).forEach(() => {});
   const kids = catKidsMap(set);
   const walk = (pid, dep) => (kids.get(pid) || []).forEach(x => {
     if(!banned.has(x.id)){
@@ -9992,17 +9991,18 @@ function closeCatMerge(){
 $('#closeCatMerge').addEventListener('click', closeCatMerge);
 $('#catMergeGo').addEventListener('click', () => {
   const set = getSetById(manageSetId);
-  if(!set || !catMergeId) return;
+  const ed = editableSetById(manageSetId);
+  if(!set || !ed || !catMergeId) return;
   const target = $('#catMergeTarget').value || '';
-  const src = catsOf(set).find(x => x.id === catMergeId);
+  const src = catsOf(ed).find(x => x.id === catMergeId);
   if(!src) return;
-  set.items.forEach(it => { if((it.cat || '') === catMergeId) it.cat = target; });
-  set.cats.forEach(c => { if(c.parent === catMergeId) c.parent = target; });
-  set.cats = catsOf(set).filter(c => c.id !== catMergeId);
+  ed.items.forEach(it => { if((it.cat || '') === catMergeId) it.cat = target; });
+  ensureCats(ed).forEach(c => { if(c.parent === catMergeId) c.parent = target; });
+  ed.cats = catsOf(ed).filter(c => c.id !== catMergeId);
   save();
   closeCatMerge();
   renderSetView(); renderMenu();
-  const tn = target ? catNameOf(set, target) : '顶层';
+  const tn = target ? catNameOf(ed, target) : '顶层';
   toast('已把「' + src.name + '」' + (target ? '并入「' + tn + '」' : '移到顶层'));
 });
 
@@ -10012,8 +10012,9 @@ $('#setRows').addEventListener('click', (e) => {
   if(!head || !act) return;
   e.stopPropagation();
   const set = getSetById(manageSetId);
+  const ed = editableSetById(manageSetId);
   const cid = head.dataset.cat;
-  const c = catsOf(set).find(x => x.id === cid);
+  const c = catsOf(ed).find(x => x.id === cid);
   if(!c) return;
   const kind = act.dataset.catact;
   if(kind === 'rename'){
@@ -10028,9 +10029,9 @@ $('#setRows').addEventListener('click', (e) => {
     openCatMerge(cid);
   }else if(kind === 'del'){
     if(!confirm('删除分类「' + c.name + '」？里面的词会回到「未分类」，它的小分类上移到上一层。')) return;
-    set.items.forEach(it => { if((it.cat || '') === cid) it.cat = ''; });
-    set.cats.forEach(x => { if(x.parent === cid) x.parent = c.parent || ''; });
-    set.cats = catsOf(set).filter(x => x.id !== cid);
+    ed.items.forEach(it => { if((it.cat || '') === cid) it.cat = ''; });
+    ensureCats(ed).forEach(x => { if(x.parent === cid) x.parent = c.parent || ''; });
+    ed.cats = catsOf(ed).filter(x => x.id !== cid);
     save(); renderSetView(); renderMenu();
     toast('已删除分类');
   }
@@ -11033,7 +11034,7 @@ function computeExtras(base){
 function pageItems(i){
   if(pageCache.has(i)) return pageCache.get(i);
   const base = deck[i].slice();
-  const list = base.concat(stagOn() ? computeExtras(base) : []);
+  const list = base.concat((stagOn() && !orderlyOn()) ? computeExtras(base) : []);
   pageCache.set(i, list);
   return list;
 }
