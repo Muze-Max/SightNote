@@ -1518,6 +1518,8 @@
     box-shadow:0 10px 26px rgba(30,40,34,.16);padding:8px 10px;
     font-size:11.5px;color:var(--soft);
   }
+  .tool-pop .tp-range{width:96px;accent-color:#3f7d5a;vertical-align:middle;}
+  .tool-pop .tp-val{font-variant-numeric:tabular-nums;color:var(--ink);margin-left:2px;}
   .tool-pop.hidden{display:none;}
   .tool-pop .tp-row{display:flex;align-items:center;gap:8px;margin:3px 0;}
   .tool-pop .tp-lab{color:var(--faint);min-width:30px;font-size:10.5px;}
@@ -11790,6 +11792,7 @@ let annotPlaced = false;
 let laserOn = false;         // 激光笔按钮
 let laserColor = '#e02b2b';  // 激光默认红
 let laserW = 5;
+let laserDur = 1800;         // 淡出时长（毫秒），可无级调整
 let laserTrail = [];         // [{x,y,t}] 归一化坐标
 let laserRAF = 0;
 
@@ -11808,7 +11811,7 @@ const annotLaserCtx = annotLaserEl && annotLaserEl.getContext ? annotLaserEl.get
 const afLaserCtx = afLaserEl && afLaserEl.getContext ? afLaserEl.getContext('2d') : null;
 
 /* —— 工具偏好：打字 / 手写各自一套，下次沿用上次的选择 —— */
-const ANNOT_PREF_DEFAULT = { tColor:'#23231f', tSize:16, dInk:'#23231f', dPen:16, dEsz:24, laser:'#e02b2b', laserW:5, penOnly:false };
+const ANNOT_PREF_DEFAULT = { tColor:'#23231f', tSize:16, dInk:'#23231f', dPen:16, dEsz:24, laser:'#e02b2b', laserW:5, laserDur:1800, penOnly:false };
 function annotPrefs(){
   if(!state.settings) state.settings = {};
   if(!state.settings.annotPrefs || typeof state.settings.annotPrefs !== 'object') state.settings.annotPrefs = {};
@@ -12034,6 +12037,7 @@ function openAnnot(item, el){
   annotEraseSize = Math.min(60, Math.max(8, pf.dEsz || 24));
   laserColor = pf.laser || '#e02b2b';
   laserW = Math.min(16, Math.max(2, pf.laserW || 5));
+  laserDur = Math.min(10000, Math.max(500, pf.laserDur || 1800));
   annotPenOnly = !!pf.penOnly;
   annotErase = false;
   laserOn = false;
@@ -12313,11 +12317,13 @@ function showToolPop(anchor, kind){
       '</div><div class="tp-row"><span class="tp-lab">粗细</span>' +
       [['细', 2], ['中', 5], ['粗', 9]].map(([n, v]) =>
         '<button class="tp-btn' + (laserW === v ? ' on' : '') + '" data-lw="' + v + '">' + n + '</button>').join('') +
-      '</div>';
+      '</div><div class="tp-row"><span class="tp-lab">淡出</span>' +
+      '<input class="tp-range" type="range" min="0.5" max="10" step="0.1" value="' + (laserDur / 1000).toFixed(1) + '" data-ldur>' +
+      '<span class="tp-val">' + (laserDur / 1000).toFixed(1) + 's</span></div>';
   }
   toolPop.innerHTML = html;
   toolPop.classList.remove('hidden');
-  toolPop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 190)) + 'px';
+  toolPop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 230)) + 'px';
   toolPop.style.top = Math.max(8, r.bottom + 6) + 'px';
   toolPop.querySelectorAll('[data-esz]').forEach(b => b.addEventListener('click', () => {
     annotEraseSize = +b.dataset.esz;
@@ -12332,6 +12338,15 @@ function showToolPop(anchor, kind){
     laserW = +b.dataset.lw;
     annotPrefSet('laserW', laserW); annotSyncUI(); closeToolPop();
   }));
+  toolPop.querySelectorAll('[data-ldur]').forEach(inp => {
+    inp.addEventListener('input', () => {
+      laserDur = Math.round(parseFloat(inp.value) * 1000);
+      const v = toolPop.querySelector('.tp-val');
+      if(v) v.textContent = (laserDur / 1000).toFixed(1) + 's';
+      annotPrefSet('laserDur', laserDur);
+    });
+    inp.addEventListener('change', () => annotPrefSet('laserDur', laserDur));
+  });
 }
 /* 长按绑定：按住 520ms 弹面板；手指一松开就取消 */
 function bindToolLongPress(el, fn){
@@ -12524,7 +12539,9 @@ function laserPaint(c, ctx, trail, now){
   if(!trail.length) return;
   const W = c.width, H = c.height;
   const ratio = W / (c.clientWidth || W || 1);
-  const LIFE = 1800, NB = 6;
+  const LIFE = laserDur, NB = 6;
+  const FADE = Math.min(900, LIFE * 0.4);
+  const alphaOf = age => age <= LIFE - FADE ? 1 : Math.max(0, (LIFE - age) / FADE);
   // 按年龄分 6 段，每段一条连续曲线；比逐点描边顺滑，也不会每点都开阴影拖慢手机
   const bands = [];
   let cur = null;
@@ -12538,7 +12555,7 @@ function laserPaint(c, ctx, trail, now){
   }
   let linkPrev = null;
   bands.forEach((bd, bi2) => {
-    const a = Math.max(0.10, 1 - (bd.bi + 0.5) / NB);
+    const a = alphaOf((bd.bi + 0.5) / NB * LIFE);
     const pts = bd.pts.slice();
     if(linkPrev && pts.length){ pts.unshift(linkPrev); }
     const head = !!linkPrev;
@@ -12572,7 +12589,7 @@ function laserPaint(c, ctx, trail, now){
 }
 function laserLoop(){
   const now = performance.now();
-  laserTrail = laserTrail.filter(q => now - q.t < 1800);
+  laserTrail = laserTrail.filter(q => now - q.t < laserDur);
   laserPaint(annotLaserEl, annotLaserCtx, laserTrail.filter(q => q.s !== 'float'), now);
   laserPaint(afLaserEl, afLaserCtx, laserTrail.filter(q => q.s === 'float'), now);
   const alive = laserTrail.length > 0;
@@ -12619,19 +12636,19 @@ function annotBindDraw(el, gate){
   el.addEventListener('pointerdown', (e) => {
     if(gate && !gate()) return;
     annotPenSeen(e);
-    // 手写笔保护：手指不落笔，只有笔（pen）或鼠标能写
-    if(annotPenOnly && e.pointerType === 'touch'){
-      if(!annotPenOnlyTiped){ annotPenOnlyTiped = true; toast('手写笔保护：手指不写，用触控笔（或鼠标）'); }
-      return;
-    }
     e.preventDefault();
     const p = annotPtOn(el, e);
-    // 手写笔 + 锁 → 当激光笔用，不落墨
+    // 激光笔：手动开着时手指/鼠标也能画（像 StarNote 的激光笔刷），用完自动淡出
     if(laserEligible(e, el)){
       const surf = (el === annotFloatCanvas) ? 'float' : 'main';
       try{ el.setPointerCapture(e.pointerId); }catch(err){}
       annotLaserState = { el: el, surf: surf };
       annotLaserDraw(el, e, surf);
+      return;
+    }
+    // 手写笔保护：手指不落笔，只有笔（pen）或鼠标能写
+    if(annotPenOnly && e.pointerType === 'touch'){
+      if(!annotPenOnlyTiped){ annotPenOnlyTiped = true; toast('手写笔保护：手指不写，用触控笔（或鼠标）'); }
       return;
     }
     if(annotLockDraw){ toast('手写已锁，先解锁再写'); return; }
