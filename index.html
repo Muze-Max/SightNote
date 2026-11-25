@@ -1510,7 +1510,7 @@
   }
   .annot.float.hidden{display:none !important;}
   .annot.float .cdot{width:14px;height:14px;flex:0 0 14px;}
-  .annot.float .annot-bar{padding:6px 9px;gap:5px;flex-wrap:wrap;overflow-x:visible;}
+  .annot.float .annot-bar{padding:6px 9px;gap:5px;flex-wrap:nowrap;overflow-x:auto;}
   .annot.float .abtn{padding:3px 7px;font-size:10px;}
   .annot.float .annot-body{border-radius:0;}
   .annot.float .annot-resize{z-index:2;}
@@ -1521,9 +1521,14 @@
   .annot-bar{
     display:flex;align-items:center;gap:6px;
     padding:7px 10px;border-bottom:1px solid var(--line);
-    background:#fcfcfa;overflow-x:auto;
-    flex-wrap:wrap;row-gap:5px;
+    background:#fcfcfa;
+    flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
+    -webkit-overflow-scrolling:touch;scrollbar-width:thin;
   }
+  .annot-bar::-webkit-scrollbar{height:4px;}
+  .annot-bar::-webkit-scrollbar-thumb{background:#d3ccbe;border-radius:3px;}
+  .annot-bar::-webkit-scrollbar-track{background:transparent;}
+  .annot-bar .abtn,.annot-bar .bgdot,.annot-bar .annot-sep,.annot-bar .cdot,.annot-bar .annot-size{flex:0 0 auto;}
   .cdot{
     width:16px;height:16px;border-radius:50%;flex:0 0 16px;
     border:1px solid rgba(0,0,0,.12);background:var(--c);cursor:pointer;padding:0;
@@ -2386,6 +2391,7 @@
   </div>
   <div class="annot-bar" id="barType">
     <button type="button" class="abtn annot-lock" id="typeLock" title="锁定打字内容">锁</button>
+    <button type="button" class="abtn" id="typeLaser" title="激光笔：点一下切换，长按选颜色和粗细">激光</button>
     <span class="annot-sep"></span>
     <button type="button" class="cdot on" data-color="#23231f" style="--c:#23231f" title="黑色"></button>
     <button type="button" class="cdot" data-color="#2a5bd7" style="--c:#2a5bd7" title="蓝色"></button>
@@ -12039,11 +12045,8 @@ function annotSyncUI(){
   });
   const er = $('#eraserBtn'), af = $('#afEraser');
   [er, af].forEach(b => { if(b){ b.classList.toggle('on', annotErase); b.textContent = annotErase ? '橡皮(开)' : '橡皮'; } });
-  const lb = $('#laserBtn'), la = $('#afLaser');
-  [lb, la].forEach(b => { if(b){ b.classList.toggle('on', !!laserOn); b.textContent = laserOn ? '激光(开)' : '激光'; } });
-  // 打字面不提供激光入口：只保留电容笔自动出激光，手指/鼠标没有这个功能
-  if(la) la.style.display = (annotTab === 'type') ? 'none' : '';
-  if(lb) lb.style.display = (annotTab === 'type') ? 'none' : '';
+  const lb = $('#laserBtn'), la = $('#afLaser'), lt = $('#typeLaser');
+  [lb, la, lt].forEach(b => { if(b){ b.classList.toggle('on', !!laserOn); b.textContent = laserOn ? '激光(开)' : '激光'; } });
   if(annotFloatEl){
     annotFloatEl.querySelectorAll('.cdot').forEach(d => d.classList.toggle('on', d.dataset.color === annotInkColor));
     const fsz = $('#afSizeNow');
@@ -12362,6 +12365,8 @@ function toggleLaser(){
 }
 $('#laserBtn').addEventListener('click', toggleLaser);
 $('#afLaser').addEventListener('click', toggleLaser);
+const typeLaserBtn = $('#typeLaser');
+if(typeLaserBtn) typeLaserBtn.addEventListener('click', toggleLaser);
 
 /* 长按工具按钮 → 弹出小面板 */
 const toolPop = $('#toolPop');
@@ -12430,6 +12435,7 @@ bindToolLongPress($('#eraserBtn'), () => showToolPop($('#eraserBtn'), 'eraser'))
 bindToolLongPress($('#afEraser'), () => showToolPop($('#afEraser'), 'eraser'));
 bindToolLongPress($('#laserBtn'), () => showToolPop($('#laserBtn'), 'laser'));
 bindToolLongPress($('#afLaser'), () => showToolPop($('#afLaser'), 'laser'));
+bindToolLongPress($('#typeLaser'), () => showToolPop($('#typeLaser'), 'laser'));
 document.addEventListener('pointerdown', (e) => {
   if(toolPop && !toolPop.classList.contains('hidden') && !e.target.closest('#toolPop') && !e.target.closest('button'))
     closeToolPop();
@@ -12586,10 +12592,13 @@ function laserCanvasFor(surface){
 }
 function laserEligible(e, el){
   if(!e) return false;
-  // 打字面：只有「电容笔 + 打字已锁」才是激光；未锁时笔照常定位光标/选词，手指照常滑动
-  if(el === annotTextEl) return e.pointerType === 'pen' && !!annotLockType;
-  // 手写面：只有激光开关打开才是激光；关掉就是普通笔，笔和手指都正常落墨
-  return !!laserOn;
+  // ① 激光必须手动开启才生效
+  if(!laserOn) return false;
+  // ② 激光 + 电容笔：只有电容笔能出激光
+  if(annotPenOnly) return e.pointerType === 'pen';
+  // ③ 只开激光：手指、笔都能出激光
+  if(el === annotTextEl) return e.pointerType === 'pen';  // 打字面手指仍用于滑动/输入
+  return true;
 }
 function laserClearAll(){
   laserTrail = [];
