@@ -2401,11 +2401,6 @@
     <span class="annot-size" id="sizeNow">16</span>
     <button type="button" class="abtn" id="sizePlus" title="增大字号">A+</button>
     <span class="annot-sep"></span>
-    <button type="button" class="bgdot on" data-bg="" style="--c:#ffffff" title="无底色">无</button>
-    <button type="button" class="bgdot" data-bg="#fff3bf" style="--c:#fff3bf" title="黄色底色"></button>
-    <button type="button" class="bgdot" data-bg="#d8ecff" style="--c:#d8ecff" title="蓝色底色"></button>
-    <button type="button" class="bgdot" data-bg="#ffd9d6" style="--c:#ffd9d6" title="红色底色"></button>
-    <span class="annot-sep"></span>
     <button type="button" class="abtn" id="clearAnnot" title="清空这条批注">清空</button>
   </div>
   <div class="annot-bar hidden" id="barDraw">
@@ -12290,14 +12285,7 @@ $('#barType').querySelectorAll('.cdot').forEach(d => {
     }
   });
 });
-/* 底色：只作用于选中的那段文字 */
-$('#barType').querySelectorAll('.bgdot').forEach(d => {
-  d.addEventListener('click', () => {
-    const v = d.dataset.bg || '';
-    if(!annotApplyToSelection('bg', v)){ toast('先选中一段文字，再点底色'); return; }
-    $('#barType').querySelectorAll('.bgdot').forEach(x => x.classList.toggle('on', x === d));
-  });
-});
+/* 底色（荧光笔）功能已移除：会遮住文字，只保留字色与清空 */
 
 /* 字号（打字栏） */
 $('#sizeMinus').addEventListener('click', () => {
