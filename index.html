@@ -12332,9 +12332,13 @@ $('#dSizePlus').addEventListener('click', () => {
 /* 橡皮：点一下开/关，长按选大小（像素擦除，只擦碰到的那一段） */
 function toggleAnnotEraser(btn){
   if(annotLockDraw){ toast('手写已锁，先解锁再用橡皮'); return; }
+  const laserWasOn = laserOn;
   annotErase = !annotErase;
+  if(annotErase && laserOn) laserOn = false;   // 橡皮与激光互斥
   annotSyncUI();
-  toast(annotErase ? '橡皮已开：滑过哪里就擦掉哪里' : '橡皮已关');
+  toast(annotErase
+    ? (laserWasOn ? '橡皮已开，激光笔自动关：滑过哪里就擦掉哪里' : '橡皮已开：滑过哪里就擦掉哪里')
+    : '橡皮已关');
 }
 $('#eraserBtn').addEventListener('click', () => toggleAnnotEraser($('#eraserBtn')));
 $('#clearAnnotDraw').addEventListener('click', clearDrawAll);
@@ -12347,16 +12351,17 @@ $('#clearAnnot').addEventListener('click', () => {
 });
 
 /* 激光笔：点一下切换，长按选颜色和粗细 */
-$('#laserBtn').addEventListener('click', () => {
+function toggleLaser(){
+  const eraseWasOn = annotErase;
   laserOn = !laserOn;
+  if(laserOn && annotErase) annotErase = false;   // 激光与橡皮互斥
   annotSyncUI();
-  toast(laserOn ? '激光笔已开：在窗口里滑动就是一道会消退的光' : '激光笔已关');
-});
-$('#afLaser').addEventListener('click', () => {
-  laserOn = !laserOn;
-  annotSyncUI();
-  toast(laserOn ? '激光笔已开：在窗口里滑动就是一道会消退的光' : '激光笔已关');
-});
+  toast(laserOn
+    ? (eraseWasOn ? '激光笔已开，橡皮自动关：在窗口里滑动就是一道会消退的光' : '激光笔已开：在窗口里滑动就是一道会消退的光')
+    : '激光笔已关');
+}
+$('#laserBtn').addEventListener('click', toggleLaser);
+$('#afLaser').addEventListener('click', toggleLaser);
 
 /* 长按工具按钮 → 弹出小面板 */
 const toolPop = $('#toolPop');
@@ -12581,8 +12586,8 @@ function laserCanvasFor(surface){
 }
 function laserEligible(e, el){
   if(!e) return false;
-  // 打字面：只认电容笔，手指、鼠标一律没有激光
-  if(el === annotTextEl) return e.pointerType === 'pen';
+  // 打字面：只有「电容笔 + 打字已锁」才是激光；未锁时笔照常定位光标/选词，手指照常滑动
+  if(el === annotTextEl) return e.pointerType === 'pen' && !!annotLockType;
   // 手写面：只有激光开关打开才是激光；关掉就是普通笔，笔和手指都正常落墨
   return !!laserOn;
 }
@@ -12760,16 +12765,17 @@ let annotLaserState = null;
 /* 打字窗表面：锁着的时候，笔在上面滑动也算激光 */
 function annotBindLaserSurface(el){
   if(!el) return;
-  let prevTA = '';
+  let taSet = false, prevTA = '';
   const stop = () => {
     if(annotLaserState && annotLaserState.el === el) annotLaserState = null;
-    if(prevTA !== ''){ el.style.touchAction = prevTA; prevTA = ''; }
+    // 用完必须还原：否则一次笔激光会把手势锁成 none，之后手指滑不动
+    if(taSet){ el.style.touchAction = prevTA; taSet = false; prevTA = ''; }
   };
   el.addEventListener('pointerdown', (e) => {
     if(!laserEligible(e, el)) return;
     e.preventDefault();
     try{ el.setPointerCapture(e.pointerId); }catch(err){}
-    if(prevTA === ''){ prevTA = el.style.touchAction || ''; el.style.touchAction = 'none'; }
+    if(!taSet){ prevTA = el.style.touchAction || ''; el.style.touchAction = 'none'; taSet = true; }
     annotLaserState = { el: el, surf: 'main' };
     annotLaserDraw(el, e, 'main');
   });
