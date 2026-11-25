@@ -12459,8 +12459,8 @@ function laserEligible(e, el){
   if(!e) return false;
   if(laserOn) return true;
   if(e.pointerType !== 'pen' || !annotPenOnly) return false;
-  const drawSurface = (el === annotFloatCanvas);
-  return drawSurface ? annotLockDraw : annotLockType;
+  // 打字窗看打字锁，画布（含手写浮窗）看手写锁
+  return (el === annotTextEl) ? annotLockType : annotLockDraw;
 }
 function laserClearAll(){
   laserTrail = [];
