@@ -1541,6 +1541,8 @@
     font-size:10.5px;padding:4px 8px;border-radius:8px;cursor:pointer;white-space:nowrap;
   }
   .abtn.on{background:#fdecec;border-color:#f0bcbc;color:#b03a2e;}
+  .penmode{font-size:13px;line-height:1;padding:4px 7px;}
+  .penmode.on{background:#eaf3ec;border-color:#bcd9c5;color:#2f7d5d;}
   .annot-size{font-size:10.5px;color:var(--faint);min-width:18px;text-align:center;}
   .annot-body{position:relative;flex:1 1 auto;min-height:0;}
   .laser-layer{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:3;}  .laser-layer.hidden{display:none;}
@@ -1564,6 +1566,7 @@
     border:0;outline:none;padding:11px 13px;overflow-y:auto;
     font-family:inherit;line-height:1.55;background:#fff;
     color:var(--ink);font-size:16px;white-space:pre-wrap;word-break:break-word;
+    touch-action:pan-y;
   }
   .annot-text:empty::before{content:attr(data-ph);color:#b9bdb6;}
   .annot-text.hidden{display:none !important;}
@@ -2401,6 +2404,7 @@
   </div>
   <div class="annot-bar hidden" id="barDraw">
     <button type="button" class="abtn annot-lock" id="drawLock" title="锁定手写">锁</button>
+    <button type="button" class="abtn penmode" id="drawPen" title="电容笔：只认触控笔，手指不写">✎</button>
     <button type="button" class="abtn" id="laserBtn" title="激光笔：点一下切换，长按选颜色和粗细">激光</button>
     <span class="annot-sep"></span>
     <button type="button" class="cdot on" data-color="#23231f" style="--c:#23231f" title="黑色"></button>
@@ -2435,6 +2439,7 @@
   </div>
   <div class="annot-bar">
     <button type="button" class="abtn annot-lock" id="afLock" title="锁定手写">锁</button>
+    <button type="button" class="abtn penmode" id="afPenMode" title="电容笔：只认触控笔，手指不写">✎</button>
     <button type="button" class="abtn" id="afLaser" title="激光笔：点一下切换，长按选颜色和粗细">激光</button>
     <span class="annot-sep"></span>
     <button type="button" class="cdot on" data-color="#23231f" style="--c:#23231f" title="黑色"></button>
@@ -12044,8 +12049,11 @@ function annotSyncUI(){
     const fsz = $('#afSizeNow');
     if(fsz) fsz.textContent = String(annotPenSize);
     const bpo = $('#afPenOnly');
-    if(bpo) bpo.classList.toggle('on', !!annotPenOnly);
-  }
+    if(bpo) bpo.classList.toggle('on', !!annotPenOnly);  }
+  ['#drawPen', '#afPenMode'].forEach(sel => {
+    const b = $(sel);
+    if(b) b.classList.toggle('on', !!annotPenOnly);
+  });
   annotUpdateUndoBtns();
   $('#sizeNow').textContent = String(annotSize);
   const dn = $('#dSizeNow');
@@ -12227,12 +12235,16 @@ $('#afSizePlus').addEventListener('click', () => {
   annotSyncUI(); annotSave(true);
 });
 /* 手写笔保护：只认触控笔/鼠标，手指不落笔 */
-$('#afPenOnly').addEventListener('click', () => {
+function annotTogglePenOnly(){
   annotPenOnly = !annotPenOnly;
   annotPenOnlyTiped = false;
   annotPrefSet('penOnly', annotPenOnly);
   annotSyncUI();
-  toast(annotPenOnly ? '手写笔保护已开：只有触控笔（或鼠标）能写，手指不落笔' : '手写笔保护已关：手指和触控笔都能写');
+  toast(annotPenOnly ? '电容笔模式已开：只有触控笔能写（鼠标也可），手指不落笔' : '电容笔模式已关：手指和触控笔都能写');
+}
+['#afPenOnly', '#drawPen', '#afPenMode'].forEach(sel => {
+  const b = $(sel);
+  if(b) b.addEventListener('click', annotTogglePenOnly);
 });
 
 /* 手写浮窗：拖动右下角调大小 */
@@ -12571,9 +12583,8 @@ function laserEligible(e, el){
   if(!e) return false;
   // 打字面：只认电容笔，手指、鼠标一律没有激光
   if(el === annotTextEl) return e.pointerType === 'pen';
-  if(laserOn) return true;
-  if(e.pointerType !== 'pen' || !annotPenOnly) return false;
-  return annotLockDraw;
+  // 手写面：只有激光开关打开才是激光；关掉就是普通笔，笔和手指都正常落墨
+  return !!laserOn;
 }
 function laserClearAll(){
   laserTrail = [];
