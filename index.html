@@ -11830,7 +11830,7 @@ let annotPlaced = false;
 let laserOn = false;         // 激光笔按钮
 let laserColor = '#e02b2b';  // 激光默认红
 let laserW = 5;
-let laserDur = 1800;         // 淡出时长（毫秒），可无级调整
+let laserDur = 500;         // 淡出时长（毫秒），可无级调整
 let laserTrail = [];         // [{x,y,t}] 归一化坐标
 let laserRAF = 0;
 
@@ -11849,7 +11849,7 @@ const annotLaserCtx = annotLaserEl && annotLaserEl.getContext ? annotLaserEl.get
 const afLaserCtx = afLaserEl && afLaserEl.getContext ? afLaserEl.getContext('2d') : null;
 
 /* —— 工具偏好：打字 / 手写各自一套，下次沿用上次的选择 —— */
-const ANNOT_PREF_DEFAULT = { tColor:'#23231f', tSize:16, dInk:'#23231f', dPen:16, dEsz:24, laser:'#e02b2b', laserW:5, laserDur:1800, penOnly:false };
+const ANNOT_PREF_DEFAULT = { tColor:'#23231f', tSize:16, dInk:'#23231f', dPen:16, dEsz:24, laser:'#e02b2b', laserW:5, laserDur:500, penOnly:false };
 function annotPrefs(){
   if(!state.settings) state.settings = {};
   if(!state.settings.annotPrefs || typeof state.settings.annotPrefs !== 'object') state.settings.annotPrefs = {};
@@ -12036,6 +12036,9 @@ function annotSyncUI(){
   [er, af].forEach(b => { if(b){ b.classList.toggle('on', annotErase); b.textContent = annotErase ? '橡皮(开)' : '橡皮'; } });
   const lb = $('#laserBtn'), la = $('#afLaser');
   [lb, la].forEach(b => { if(b){ b.classList.toggle('on', !!laserOn); b.textContent = laserOn ? '激光(开)' : '激光'; } });
+  // 打字面不提供激光入口：只保留电容笔自动出激光，手指/鼠标没有这个功能
+  if(la) la.style.display = (annotTab === 'type') ? 'none' : '';
+  if(lb) lb.style.display = (annotTab === 'type') ? 'none' : '';
   if(annotFloatEl){
     annotFloatEl.querySelectorAll('.cdot').forEach(d => d.classList.toggle('on', d.dataset.color === annotInkColor));
     const fsz = $('#afSizeNow');
@@ -12075,7 +12078,14 @@ function openAnnot(item, el){
   annotEraseSize = Math.min(60, Math.max(8, pf.dEsz || 24));
   laserColor = pf.laser || '#e02b2b';
   laserW = Math.min(16, Math.max(2, pf.laserW || 5));
-  laserDur = Math.min(10000, Math.max(500, pf.laserDur || 1800));
+  // 淡出默认改为 0.5s：老档案里若还是旧默认 1800，做一次性迁移
+  let ldur = pf.laserDur;
+  if(ldur != null && pf.ldurV !== 2){
+    if(ldur === 1800) ldur = 500;
+    annotPrefSet('laserDur', ldur);
+    annotPrefSet('ldurV', 2);
+  }
+  laserDur = Math.min(10000, Math.max(500, ldur || 500));
   annotPenOnly = !!pf.penOnly;
   annotErase = false;
   laserOn = false;
@@ -12559,10 +12569,11 @@ function laserCanvasFor(surface){
 }
 function laserEligible(e, el){
   if(!e) return false;
+  // 打字面：只认电容笔，手指、鼠标一律没有激光
+  if(el === annotTextEl) return e.pointerType === 'pen';
   if(laserOn) return true;
   if(e.pointerType !== 'pen' || !annotPenOnly) return false;
-  // 打字窗看打字锁，画布（含手写浮窗）看手写锁
-  return (el === annotTextEl) ? annotLockType : annotLockDraw;
+  return annotLockDraw;
 }
 function laserClearAll(){
   laserTrail = [];
@@ -14137,6 +14148,7 @@ window.addEventListener('pageshow', wakeSync);
 </script>
 </body>
 </html>
+
 
 
 
