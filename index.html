@@ -607,6 +607,19 @@
     from{opacity:0;}
     to{opacity:1;}
   }
+  /* 条理：分类名（贴在该块首行左侧） */
+  .cat-label{
+    position:absolute;left:0;top:0;
+    display:inline-block;
+    font-size:12px;letter-spacing:.08em;
+    color:#7f8f85;
+    padding:2px 2px;
+    border-left:2px solid #b9cbbf;
+    padding-left:7px;
+    pointer-events:none;
+    white-space:nowrap;
+    animation:itemIn .32s ease backwards;
+  }
   .word:hover{color:var(--accent);border-bottom-color:rgba(63,125,90,.3);}
   .word.active{color:var(--accent);border-bottom-color:var(--accent);}
   .field.has-active .word:not(.active){opacity:.34;}
@@ -780,6 +793,22 @@
   }
   .batch-act:hover{border-color:var(--accent);color:var(--accent);}
   .batch-act.danger:hover{border-color:var(--warn);color:var(--warn);}
+  /* 分类 */
+  .cat-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 10px;}
+  .cat-tools .btn-line{padding:6px 12px;font-size:11px;}
+  .cat-hint{font-size:10.5px;color:var(--faint);}
+  .cat-head{
+    display:flex;align-items:center;gap:8px;
+    padding:9px 4px 7px;margin-top:6px;
+    border-bottom:1px solid #e3ece5;background:#f7faf8;
+  }
+  .cat-head.child{padding-left:26px;}
+  .cat-head .nm{font-size:12.5px;color:#2f4438;letter-spacing:.04em;font-weight:600;}
+  .cat-head .cnt{font-size:10.5px;color:var(--faint);}
+  .cat-head .acts{margin-left:auto;display:flex;gap:2px;}
+  .cat-head .acts button{border:0;background:none;color:#a7a79d;cursor:pointer;font-size:11px;padding:3px 6px;}
+  .cat-head .acts button:hover{color:var(--accent);}
+  .cat-head .acts button.danger:hover{color:var(--warn);}
   .row-item .sel{display:flex;align-items:center;flex:0 0 auto;padding-top:2px;}
   .row-item .sel input{width:14px;height:14px;margin:0;accent-color:#3f6b52;}
   .row-item.picked{background:#f4f9f5;}
@@ -1558,6 +1587,13 @@
         <div class="lib-chip add" id="newSetChip" role="button" tabindex="0" title="新建一个知识库（可归到某个知识库下面）"><span class="lc-n">＋ 新建知识库</span></div>
       </div>
       <button class="ghost-add" id="openImport">＋ 导入图片 / 文档 / 文字</button>
+      <div class="setting-row" style="margin-top:12px;">
+        <div>
+          条理
+          <div class="desc">开启后，学习页按分类分块显示，分类名贴在每块首行左侧；错位只打乱每个分类内部的词，关掉错位就按知识库列表顺序从左到右排</div>
+        </div>
+        <button class="switch" data-setting="orderly" aria-label="条理"></button>
+      </div>
     </section>
 
     <section>
@@ -1866,6 +1902,10 @@
       <button class="batch-act" data-batch="move">移</button>
       <button class="batch-act danger" data-batch="del">删</button>
     </div>
+    <div class="cat-tools">
+      <button class="btn-line" id="newCat">＋ 新建分类</button>
+      <span class="cat-hint">分类可以再分小类；点分类那行的「并入」可把它移动 / 合并到另一个分类</span>
+    </div>
     <div id="setRows"></div>
   </div>
 </div>
@@ -2040,13 +2080,38 @@
 <div class="modal hidden" id="moveModal">
   <div class="sheet">
     <div class="sheet-head">
-      <h3>转移到其他知识库</h3>
+      <h3>移 · 归类 / 转移</h3>
       <button class="close-x" id="closeMove" aria-label="关闭">×</button>
     </div>
     <div class="sheet-body">
-      <p class="format-tip" id="moveInfo"></p>
-      <div class="field-line"><select id="moveTarget"></select></div>
-      <button class="btn-line" id="doMove" style="margin-top:14px;">转移</button>
+      <div class="tabs" style="padding:0 0 6px;">
+        <button class="tt-tab on" data-mtab="cat">移到某分类</button>
+        <button class="tt-tab" data-mtab="set">移到其他知识库</button>
+      </div>
+      <div class="tt-pane on" id="moveCatPane">
+        <p class="format-tip" id="moveCatInfo"></p>
+        <div class="field-line"><select id="moveCat"></select></div>
+      </div>
+      <div class="tt-pane" id="moveSetPane">
+        <p class="format-tip" id="moveInfo"></p>
+        <div class="field-line"><select id="moveTarget"></select></div>
+      </div>
+      <button class="btn-line" id="doMove" style="margin-top:14px;">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============== 分类：并入（移动 / 合并） ============== -->
+<div class="modal hidden" id="catMergeModal">
+  <div class="sheet">
+    <div class="sheet-head">
+      <h3 id="catMergeTitle">把分类并入…</h3>
+      <button class="close-x" id="closeCatMerge" aria-label="关闭">×</button>
+    </div>
+    <div class="sheet-body">
+      <p class="format-tip">并入后，这个分类里的词条归到目标分类；它下属的小分类也跟着挂过去。选「顶层」只把它移到最外层，不合并不删词。</p>
+      <div class="field-line"><select id="catMergeTarget"></select></div>
+      <button class="btn-line" id="catMergeGo" style="margin-top:14px;">确定</button>
     </div>
   </div>
 </div>
@@ -5706,13 +5771,13 @@ function closeTransfer(){
   hideLater(transferModal);
 }
 function ttab(t){
-  $$('.tt-tab').forEach(b => b.classList.toggle('on', b.dataset.ttab === t));
+  $$('#transferModal .tt-tab').forEach(b => b.classList.toggle('on', b.dataset.ttab === t));
   $('#ttPaneOut').classList.toggle('on', t === 'out');
   $('#ttPaneIn').classList.toggle('on', t === 'in');
 }
 $('#closeTransfer').addEventListener('click', closeTransfer);
 transferModal.addEventListener('click', e => { if(e.target === transferModal) closeTransfer(); });
-$$('.tt-tab').forEach(b => b.addEventListener('click', () => ttab(b.dataset.ttab)));
+$$('#transferModal .tt-tab').forEach(b => b.addEventListener('click', () => ttab(b.dataset.ttab)));
 
 $('#ttGen').addEventListener('click', async () => {
   const pass = $('#ttPassOut').value.trim();
@@ -5801,7 +5866,13 @@ function getPoolItems(){
       if(!k || seen.has(k)) return;
       if(kn && kn.has(k)) return;
       seen.add(k);
-      out.push(Object.assign({}, it, { src: set.name }));
+      const cid = catNameOf(set, it.cat) ? it.cat : '';
+      out.push(Object.assign({}, it, {
+        src: set.name,
+        _setId: set.id,
+        _cat: cid,
+        _label: cid ? catNameOf(set, cid) : set.name
+      }));
     });
   });
   // 陌生里额外导入的词也计入普通练习
@@ -5978,6 +6049,7 @@ function markNet(){
 function modeTextOf(){
   return currentMode === 'unknown' ? '陌生复习'
        : currentMode === 'known' ? '熟词回看'
+       : orderlyOn() ? '条理 · 按分类'
        : (state.settings.random ? '随机混合' : '顺序播放');
 }
 function applyPerPage(n){
@@ -9508,6 +9580,45 @@ function setDepthOf(id){
   return depth;
 }
 
+/* ---------- 知识库里的「分类」 ---------- */
+function catsOf(set){ return (set && Array.isArray(set.cats)) ? set.cats : []; }
+function catNameOf(set, id){
+  if(!id) return '';
+  const c = catsOf(set).find(x => x.id === id);
+  return c ? c.name : '';
+}
+function catKidsMap(set){
+  const cats = catsOf(set), ids = new Set(cats.map(c => c.id)), m = new Map();
+  cats.forEach(c => {
+    const p = (c.parent && ids.has(c.parent) && c.parent !== c.id) ? c.parent : '';
+    if(!m.has(p)) m.set(p, []);
+    m.get(p).push(c);
+  });
+  return m;
+}
+function catDepthIn(set, id){
+  const cats = catsOf(set), guard = new Set();
+  let depth = 0, cur = cats.find(c => c.id === id);
+  while(cur && cur.parent && !guard.has(cur.id)){
+    guard.add(cur.id);
+    const p = cats.find(c => c.id === cur.parent);
+    if(!p) break;
+    depth++; cur = p;
+  }
+  return depth;
+}
+function newCatId(){ return 'cat' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
+/* 分类的深度优先顺序：给学习页排块用 */
+function catOrderMap(set){
+  const kids = catKidsMap(set), m = new Map();
+  let n = 0;
+  const walk = pid => {
+    (kids.get(pid) || []).forEach(c => { m.set(c.id, n++); walk(c.id); });
+  };
+  walk('');
+  return m;
+}
+
 function renderMenu(){
   const list = $('#setList');
   list.innerHTML = '';
@@ -9631,6 +9742,10 @@ $$('.switch').forEach(sw => {
     sw.classList.toggle('on', state.settings[key]);
     save(); renderMenu();
     if(key === 'readAloud') toast(state.settings.readAloud ? '朗读已开启：点单词就会读出来' : '朗读已关闭');
+    if(key === 'orderly'){
+      toast(state.settings.orderly ? '条理已开启：学习页按分类分块' : '条理已关闭：学习页回到整页混排');
+      if(!$('#viewStudy').classList.contains('hidden')) startStudy(currentMode);
+    }
   });
 });
 if($('#stagSeg')) $('#stagSeg').addEventListener('click', e => {
@@ -9640,6 +9755,8 @@ if($('#stagSeg')) $('#stagSeg').addEventListener('click', e => {
   save();
   markStag();
   toast(state.settings.stagger ? '错位已开：每次进入都会重新打乱' : '错位已关：顺序与位置固定');
+  // 条理开着时，错位只管每个分类块内部，需要重排一次
+  if(orderlyOn() && !$('#viewStudy').classList.contains('hidden')) startStudy(currentMode);
 });
 
 $$('.book').forEach(b => {
@@ -9755,7 +9872,8 @@ function renderSetView(){
   if(!shownIdx.length){ box.innerHTML = '<div class="empty">没有匹配的条目</div>'; return; }
 
   const frag = document.createDocumentFragment();
-  shownIdx.forEach(idx => {
+
+  const makeRow = (idx) => {
     const it = set.items[idx];
     const row = document.createElement('div');
     const picked = setPicked.has(idx);
@@ -9769,13 +9887,154 @@ function renderSetView(){
         (it.root ? '<div class="si-meta">' + escapeHtml(it.root) + '</div>' : '') +
       '</div>' +
       (setSelOn ? '' : '<div class="acts"><button data-act="edit">改</button><button data-act="move">移</button><button data-act="del" class="danger">删</button></div>');
-    frag.appendChild(row);
-  });
+    return row;
+  };
+
+  const cats = catsOf(set);
+  const kids = catKidsMap(set);
+  const uncatIdx = shownIdx.filter(i => !catNameOf(set, set.items[i].cat));
+
+  const pushCatHead = (cat, depth) => {
+    const n = shownIdx.filter(i => (set.items[i].cat || '') === cat.id).length;
+    const el = document.createElement('div');
+    el.className = 'cat-head' + (depth ? ' child' : '');
+    el.dataset.cat = cat.id;
+    el.innerHTML =
+      '<span class="nm">' + escapeHtml(cat.name) + '</span>' +
+      '<span class="cnt">' + n + ' 条</span>' +
+      '<div class="acts"><button data-catact="rename">改名</button><button data-catact="merge">并入</button><button data-catact="del" class="danger">删除</button></div>';
+    frag.appendChild(el);
+    shownIdx.filter(i => (set.items[i].cat || '') === cat.id).forEach(i => frag.appendChild(makeRow(i)));
+    (kids.get(cat.id) || []).forEach(c => pushCatHead(c, depth + 1));
+  };
+
+  if(cats.length){
+    // 第一个分类就落在图一红圈那一行，其余依次往下
+    (kids.get('') || []).forEach(c => pushCatHead(c, 0));
+    if(uncatIdx.length){
+      const el = document.createElement('div');
+      el.className = 'cat-head';
+      el.innerHTML = '<span class="nm">未分类</span><span class="cnt">' + uncatIdx.length + ' 条</span>';
+      frag.appendChild(el);
+      uncatIdx.forEach(i => frag.appendChild(makeRow(i)));
+    }
+  }else{
+    shownIdx.forEach(i => frag.appendChild(makeRow(i)));
+  }
   box.appendChild(frag);
 }
 
 const itemModal = $('#itemModal');
 const moveModal = $('#moveModal');
+
+/* ---------- 分类：新建 / 改名 / 并入 / 删除 ---------- */
+function catDescendantsOf(set, id){
+  const kids = catKidsMap(set), out = new Set();
+  const walk = pid => (kids.get(pid) || []).forEach(c => {
+    if(out.has(c.id)) return;
+    out.add(c.id); walk(c.id);
+  });
+  walk(id);
+  return out;
+}
+function ensureCats(set){
+  if(!Array.isArray(set.cats)) set.cats = [];
+  return set.cats;
+}
+$('#newCat').addEventListener('click', () => {
+  const set = getSetById(manageSetId);
+  if(!set) return;
+  const name = prompt('新分类的名称（如：螨类）', '');
+  if(name == null) return;
+  const clean = name.replace(/\s+/g, ' ').trim();
+  if(!clean){ toast('名字不能为空'); return; }
+  ensureCats(set).push({ id: newCatId(), name: clean, parent: '' });
+  save(); renderSetView(); renderMenu();
+  toast('已新建分类「' + clean + '」');
+});
+
+const catMergeModal = $('#catMergeModal');
+let catMergeId = '';
+function openCatMerge(catId){
+  const set = getSetById(manageSetId);
+  const c = catsOf(set).find(x => x.id === catId);
+  if(!c) return;
+  catMergeId = catId;
+  $('#catMergeTitle').textContent = '把「' + c.name + '」并入…';
+  const banned = catDescendantsOf(set, catId);
+  banned.add(catId);
+  const sel = $('#catMergeTarget');
+  sel.innerHTML = '';
+  const top = document.createElement('option');
+  top.value = '';
+  top.textContent = '（顶层：只移动，不合并）';
+  sel.appendChild(top);
+  catKidsMap(set).forEach(() => {});
+  const kids = catKidsMap(set);
+  const walk = (pid, dep) => (kids.get(pid) || []).forEach(x => {
+    if(!banned.has(x.id)){
+      const o = document.createElement('option');
+      o.value = x.id;
+      o.textContent = '　'.repeat(dep) + x.name;
+      sel.appendChild(o);
+    }
+    walk(x.id, dep + 1);
+  });
+  walk('', 0);
+  catMergeModal.classList.remove('hidden');
+  requestAnimationFrame(() => catMergeModal.classList.add('show'));
+}
+function closeCatMerge(){
+  catMergeModal.classList.remove('show');
+  catMergeId = '';
+  hideLater(catMergeModal);
+}
+$('#closeCatMerge').addEventListener('click', closeCatMerge);
+$('#catMergeGo').addEventListener('click', () => {
+  const set = getSetById(manageSetId);
+  if(!set || !catMergeId) return;
+  const target = $('#catMergeTarget').value || '';
+  const src = catsOf(set).find(x => x.id === catMergeId);
+  if(!src) return;
+  set.items.forEach(it => { if((it.cat || '') === catMergeId) it.cat = target; });
+  set.cats.forEach(c => { if(c.parent === catMergeId) c.parent = target; });
+  set.cats = catsOf(set).filter(c => c.id !== catMergeId);
+  save();
+  closeCatMerge();
+  renderSetView(); renderMenu();
+  const tn = target ? catNameOf(set, target) : '顶层';
+  toast('已把「' + src.name + '」' + (target ? '并入「' + tn + '」' : '移到顶层'));
+});
+
+$('#setRows').addEventListener('click', (e) => {
+  const head = e.target.closest('.cat-head');
+  const act = e.target.closest('[data-catact]');
+  if(!head || !act) return;
+  e.stopPropagation();
+  const set = getSetById(manageSetId);
+  const cid = head.dataset.cat;
+  const c = catsOf(set).find(x => x.id === cid);
+  if(!c) return;
+  const kind = act.dataset.catact;
+  if(kind === 'rename'){
+    const name = prompt('分类名称', c.name);
+    if(name == null) return;
+    const clean = name.replace(/\s+/g, ' ').trim();
+    if(!clean){ toast('名字不能为空'); return; }
+    c.name = clean;
+    save(); renderSetView(); renderMenu();
+    toast('已改名');
+  }else if(kind === 'merge'){
+    openCatMerge(cid);
+  }else if(kind === 'del'){
+    if(!confirm('删除分类「' + c.name + '」？里面的词会回到「未分类」，它的小分类上移到上一层。')) return;
+    set.items.forEach(it => { if((it.cat || '') === cid) it.cat = ''; });
+    set.cats.forEach(x => { if(x.parent === cid) x.parent = c.parent || ''; });
+    set.cats = catsOf(set).filter(x => x.id !== cid);
+    save(); renderSetView(); renderMenu();
+    toast('已删除分类');
+  }
+});
 
 function openItemModal(index){
   const set = getSetById(manageSetId);
@@ -9825,6 +10084,19 @@ function saveItemForm(){
   toast(added ? '已添加' : '已保存');
 }
 
+let moveTab = 'cat';
+function setMoveTab(tab){
+  moveTab = (tab === 'set') ? 'set' : 'cat';
+  $('#moveCatPane').classList.toggle('on', moveTab === 'cat');
+  $('#moveSetPane').classList.toggle('on', moveTab === 'set');
+  document.querySelectorAll('#moveModal .tt-tab').forEach(b => {
+    b.classList.toggle('on', b.dataset.mtab === moveTab);
+  });
+}
+document.querySelectorAll('#moveModal .tt-tab').forEach(b => {
+  b.addEventListener('click', () => setMoveTab(b.dataset.mtab));
+});
+
 function openMoveModal(indexOrList){
   const set = getSetById(manageSetId);
   if(!set) return;
@@ -9832,8 +10104,32 @@ function openMoveModal(indexOrList){
     .map(Number).filter(i => set.items[i]);
   if(!idxs.length) return;
   const targets = allSets().filter(s => s.id !== set.id);
-  if(!targets.length){ toast('还没有其他知识库可以接收'); return; }
   movingIdxs = idxs;
+
+  // 分类一栏
+  const cats = catsOf(set);
+  const catSel = $('#moveCat');
+  catSel.innerHTML = '';
+  const o0 = document.createElement('option');
+  o0.value = '';
+  o0.textContent = '（未分类：从分类里拿出来）';
+  catSel.appendChild(o0);
+  const kids = catKidsMap(set);
+  const walk = (pid, dep) => (kids.get(pid) || []).forEach(c => {
+    const o = document.createElement('option');
+    o.value = c.id;
+    o.textContent = '　'.repeat(dep) + c.name;
+    catSel.appendChild(o);
+    walk(c.id, dep + 1);
+  });
+  walk('', 0);
+  const curCat = set.items[idxs[0]] && set.items[idxs[0]].cat || '';
+  catSel.value = cats.some(c => c.id === curCat) ? curCat : '';
+  $('#moveCatInfo').textContent = idxs.length === 1
+    ? '把「' + set.items[idxs[0]].en + '」归到：'
+    : '把选中的 ' + idxs.length + ' 条归到：';
+
+  // 其他知识库一栏
   $('#moveInfo').textContent = idxs.length === 1
     ? '把「' + set.items[idxs[0]].en + '」从「' + set.name + '」转移到：'
     : '把选中的 ' + idxs.length + ' 条从「' + set.name + '」转移到：';
@@ -9845,6 +10141,8 @@ function openMoveModal(indexOrList){
     o.textContent = t.name + '（' + t.items.length + ' 条）';
     sel.appendChild(o);
   });
+
+  setMoveTab(cats.length ? 'cat' : 'set');
   moveModal.classList.remove('hidden');
   requestAnimationFrame(() => moveModal.classList.add('show'));
 }
@@ -10545,9 +10843,24 @@ $('#setRows').addEventListener('click', (e) => {
 $('#closeMove').addEventListener('click', closeMoveModal);
 $('#doMove').addEventListener('click', () => {
   const set = getSetById(manageSetId);
+  if(!set || !movingIdxs.length) return;
+  // 分类模式：只在库内改归类
+  if(moveTab === 'cat'){
+    const cid = $('#moveCat').value || '';
+    const ed = editableSetById(manageSetId);
+    if(!ed) return;
+    movingIdxs.map(i => ed.items[i]).filter(Boolean).forEach(item => { item.cat = cid; });
+    save();
+    closeMoveModal();
+    setPicked.clear();
+    renderSetView(); renderMenu();
+    const nm = cid ? catNameOf(set, cid) : '未分类';
+    toast('已归到「' + nm + '」');
+    return;
+  }
   const targetId = $('#moveTarget').value;
   const target = getSetById(targetId);
-  if(!set || !target || !movingIdxs.length) return;
+  if(!target) return;
   const items = movingIdxs.map(i => set.items[i]).filter(Boolean);
   const targetEd = editableSetById(targetId);
   const srcEd = editableSetById(manageSetId);
@@ -10555,7 +10868,7 @@ $('#doMove').addEventListener('click', () => {
   let moved = 0, dup = 0;
   items.forEach(item => {
     if(targetEd.items.some(x => keyOf(x) === keyOf(item))){ dup++; return; }
-    targetEd.items.push(Object.assign({}, item));
+    targetEd.items.push(Object.assign({}, item, { cat: '' }));
     const at = srcEd.items.findIndex(x => keyOf(x) === keyOf(item));
     if(at >= 0) srcEd.items.splice(at, 1);
     moved++;
@@ -10600,11 +10913,13 @@ function startStudy(mode){
     seen.add(k); return true;
   });
 
-  pool = state.settings.random ? shuffle(items) : items;
+  pool = orderlyOn() ? orderlyOrder(items)
+       : (state.settings.random ? shuffle(items) : items);
   pageIndex = 0;
 
   const modeText = currentMode === 'unknown' ? '陌生复习'
                  : currentMode === 'known' ? '熟词回看'
+                 : orderlyOn() ? '条理 · 按分类'
                  : (state.settings.random ? '随机混合' : '顺序播放');
   $('#modeLabel').textContent = modeText + ' · ' + pool.length + ' 条';
 
@@ -10723,6 +11038,139 @@ function pageItems(i){
   return list;
 }
 
+/* 条理：学习页按分类成块 */
+function orderlyOn(){ return !!(state.settings && state.settings.orderly); }
+function orderlyOrder(items){
+  const sets = allSets();
+  const setIdx = new Map();
+  const catOrd = new Map();
+  sets.forEach((s, i) => {
+    setIdx.set(s.id, i);
+    catOrderMap(s).forEach((v, k) => catOrd.set(s.id + '|' + k, v));
+  });
+  const si = it => setIdx.has(it._setId) ? setIdx.get(it._setId) : 999;
+  const co = it => catOrd.has(it._setId + '|' + (it._cat || '')) ? catOrd.get(it._setId + '|' + (it._cat || '')) : 9999;
+  const pairs = items.map((it, i) => ({ it, i, si: si(it), co: co(it) }));
+  pairs.sort((a, b) => (a.si - b.si) || (a.co - b.co) || (a.i - b.i));
+  let arr = pairs.map(p => p.it);
+  if(stagOn()){
+    // 错位开：分类之间顺序不动，只在每个分类块内部打乱
+    const groups = [];
+    let cur = null;
+    arr.forEach(it => {
+      const k = si(it) + '|' + (it._cat || '');
+      if(!cur || cur.k !== k){ cur = { k: k, list: [] }; groups.push(cur); }
+      cur.list.push(it);
+    });
+    arr = [];
+    groups.forEach(g => { arr = arr.concat(shuffle(g.list)); });
+  }
+  return arr;
+}
+
+/* 每条分类块：分类名贴在首行左侧，块内从左到右排 */
+function layoutGrouped(items){
+  const W = field.clientWidth, H = field.clientHeight;
+  if(!W || !H) return { rows: [], labels: [] };
+  const small = W < 640;
+  const padX = small ? 16 : Math.max(44, W*0.045);
+  const padTop = small ? 10 : 20;
+  const padBottom = small ? 66 : 80;
+  const availW = W - padX*2;
+  const availH = H - padTop - padBottom;
+  const gap = small ? 18 : 30;
+  const rowGap = small ? 18 : 30;
+  const blockGap = small ? 16 : 28;
+  const wrapW = Math.min(small ? availW : 560, availW);
+  const maxPerRow = small ? 3 : 6;
+  const lfs = small ? 11 : 12;
+  const lmax = small ? 74 : 122;
+
+  let list = items.map(it => {
+    const fs = fontSizeFor(it);
+    const size = measureItem(it, wrapW, fs, shownTextOf(it));
+    return { it, fs, w: size.w, h: size.h,
+      _gk: (it._setId || '') + '|' + (it._cat || ''),
+      _lb: it._label || '' };
+  });
+  const seen = new Set();
+  list = list.filter(m => {
+    const k = keyOf(m.it);
+    if(seen.has(k)) return false;
+    seen.add(k); return true;
+  });
+
+  const labelW = txt => {
+    if(!txt) return 0;
+    const m = getMeasurer();
+    const sp = document.createElement('span');
+    sp.style.cssText = 'position:static;display:inline-block;font-size:' + lfs + 'px;white-space:nowrap;padding-left:9px;';
+    sp.textContent = txt;
+    m.appendChild(sp);
+    const w = sp.offsetWidth;
+    sp.remove();
+    return Math.min(lmax, Math.max(32, w));
+  };
+
+  const build = arr => {
+    const groups = [];
+    let cur = null;
+    arr.forEach(m => {
+      if(!cur || cur.k !== m._gk){ cur = { k: m._gk, label: m._lb, items: [] }; groups.push(cur); }
+      cur.items.push(m);
+    });
+    const rows = [], labels = [];
+    let y = 0;
+    groups.forEach(g => {
+      const lw = labelW(g.label);
+      let rowItems = [], rowW = 0, rowH = 0, rowIdx = 0;
+      const flush = () => {
+        if(!rowItems.length) return;
+        const indent = (rowIdx === 0 && lw) ? lw + 10 : 0;
+        const rAvail = availW - indent;
+        const sumW = rowItems.reduce((s, m) => s + m.w, 0);
+        const free = Math.max(0, rAvail - sumW);
+        const n = rowItems.length;
+        const gapX = Math.min(gap, free / Math.max(1, n + 1));
+        const rowLen = sumW + gapX * (n - 1);
+        const baseX = padX + indent + Math.max(0, (rAvail - rowLen) / 2);
+        const jit = stagOn();
+        let x = baseX;
+        rowItems.forEach(m => {
+          const jx = jit ? (Math.random() - 0.5) * Math.min(8, gapX * 0.28) : 0;
+          m.x = Math.max(padX + indent, Math.min(x + jx, padX + availW - m.w));
+          m.y = y + (rowH - m.h) / 2;
+          x += m.w + gapX;
+        });
+        if(rowIdx === 0 && lw) labels.push({ text: g.label, x: padX + 2, y: y + Math.max(0, (rowH - lfs) / 2), w: lw });
+        rows.push({ items: rowItems, h: rowH });
+        y += rowH + rowGap;
+        rowItems = []; rowW = 0; rowH = 0; rowIdx++;
+      };
+      g.items.forEach(m => {
+        const indent = (rowIdx === 0 && lw) ? lw + 10 : 0;
+        const rAvail = availW - indent;
+        if(rowItems.length && (rowItems.length >= maxPerRow || rowW + gap + m.w > rAvail)) flush();
+        rowW += (rowItems.length ? gap : 0) + m.w;
+        rowH = Math.max(rowH, m.h);
+        rowItems.push(m);
+      });
+      flush();
+      y += blockGap;
+    });
+    return { rows: rows, labels: labels, totalH: y };
+  };
+
+  let built = build(list);
+  while(built.totalH > availH && list.length > 1){
+    list.pop();
+    built = build(list);
+  }
+  built.rows.forEach(r => r.items.forEach(m => { m.y += padTop; }));
+  built.labels.forEach(l => { l.y += padTop; });
+  return { rows: built.rows, labels: built.labels };
+}
+
 /* 每次渲染都重新打乱顺序、字号和位置；放不下时优先舍弃加权重复项 */
 function layout(items){
   const W = field.clientWidth;
@@ -10822,9 +11270,25 @@ function renderPage(){
     return;
   }
 
-  const rows = layout(pageItems(pageIndex));
+  const items = pageItems(pageIndex);
+  let rows = [], labels = [];
+  if(orderlyOn()){
+    const g = layoutGrouped(items);
+    rows = g.rows; labels = g.labels;
+  }else{
+    rows = layout(items);
+  }
   field.innerHTML = '';
   const frag = document.createDocumentFragment();
+
+  labels.forEach(l => {
+    const el = document.createElement('span');
+    el.className = 'cat-label';
+    el.textContent = l.text;
+    el.style.left = l.x.toFixed(1) + 'px';
+    el.style.top = l.y.toFixed(1) + 'px';
+    frag.appendChild(el);
+  });
 
   rows.forEach(row => {
     row.items.forEach(m => {
