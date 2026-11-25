@@ -774,6 +774,7 @@
     border:0;background:none;color:#c6c6bc;cursor:pointer;font-size:15px;padding:2px 6px;
   }
   .row-item .rm:hover{color:var(--warn);}
+  .dh{flex:0 0 16px;width:16px;color:#b9c3bb;font-size:13px;cursor:grab;text-align:center;touch-action:none;}
   .set-tools{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 14px;}
   .set-tools .btn-line{padding:7px 13px;font-size:11px;}
   .set-tools .multi-btn{margin-left:auto;border-color:#cfdcd3;color:#5d7a67;}
@@ -784,6 +785,13 @@
     font-size:11.5px;color:#4e5a53;
   }
   .batch-bar.hidden{display:none;}
+  .set-sticky{position:sticky;top:0;z-index:4;background:var(--paper);padding:2px 0 4px;margin-bottom:2px;}
+  .drop-before{box-shadow:inset 0 3px 0 #2f7d5d;}
+  .drop-after{box-shadow:inset 0 -3px 0 #2f7d5d;}
+  .drop-into{background:#eef6f0;}
+  .drag-src{opacity:.5;}
+  .set-order-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:11px;color:#5a6472;padding:8px 10px;margin:6px 0;border:1px dashed var(--line);border-radius:10px;}
+  .set-order-bar.hidden{display:none;}
   .batch-all{display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:#3f5147;}
   .batch-all input{width:14px;height:14px;margin:0;accent-color:#3f6b52;}
   .batch-n{color:var(--faint);font-size:11px;}
@@ -1502,6 +1510,21 @@
   .abtn.on{background:#fdecec;border-color:#f0bcbc;color:#b03a2e;}
   .annot-size{font-size:10.5px;color:var(--faint);min-width:18px;text-align:center;}
   .annot-body{position:relative;flex:1 1 auto;min-height:0;}
+  .laser-layer{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:3;}
+  .laser-layer.hidden{display:none;}
+  .tool-pop{
+    position:fixed;z-index:9999;display:block;
+    background:#fff;border:1px solid var(--line);border-radius:12px;
+    box-shadow:0 10px 26px rgba(30,40,34,.16);padding:8px 10px;
+    font-size:11.5px;color:var(--soft);
+  }
+  .tool-pop.hidden{display:none;}
+  .tool-pop .tp-row{display:flex;align-items:center;gap:8px;margin:3px 0;}
+  .tool-pop .tp-lab{color:var(--faint);min-width:30px;font-size:10.5px;}
+  .tool-pop .tp-dot{width:18px;height:18px;border-radius:50%;border:1px solid rgba(0,0,0,.1);cursor:pointer;padding:0;background:var(--c);}
+  .tool-pop .tp-dot.on{box-shadow:0 0 0 2px #fff,0 0 0 3.5px var(--c);}
+  .tool-pop .tp-btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:3px 9px;font-size:10.5px;color:var(--soft);cursor:pointer;}
+  .tool-pop .tp-btn.on{background:#fdecec;border-color:#f0bcbc;color:#b03a2e;}
   .annot-text{
     position:absolute;inset:0;width:100%;height:100%;
     border:0;outline:none;padding:11px 13px;overflow-y:auto;
@@ -1585,6 +1608,10 @@
         </div>
       </div>
       <ul class="set-list" id="setList"></ul>
+      <div class="set-order-bar hidden" id="setOrderBar">
+        <span>整理中：按住上下拖，松手就按新顺序排</span>
+        <button class="btn-line" id="setOrderDone">完成</button>
+      </div>
       <div class="lib-row" style="margin:8px 0 2px;">
         <div class="lib-chip add" id="newSetChip" role="button" tabindex="0" title="新建一个知识库（可归到某个知识库下面）"><span class="lc-n">＋ 新建知识库</span></div>
       </div>
@@ -1883,6 +1910,7 @@
     <div class="mode-label" id="setModeLabel"></div>
   </div>
   <div class="list-wrap">
+    <div class="set-sticky" id="setSticky">
     <div class="list-head">
       <h2 id="setTitle">知识库</h2>
       <span class="cnt" id="setCount"></span>
@@ -1895,7 +1923,6 @@
       <button class="btn-line" id="migrateBtn">迁移 · 导出 / 导入</button>
       <button class="btn-line" id="setMove">移入知识库</button>
       <button class="btn-line" id="deleteSet">删除知识库</button>
-      <button class="btn-line multi-btn" id="setMulti">多选</button>
     </div>
     <div class="batch-bar hidden" id="batchBar">
       <label class="batch-all"><input type="checkbox" id="batchAll" spellcheck="false"><span id="batchAllTxt">全选</span></label>
@@ -1903,10 +1930,12 @@
       <button class="batch-act" data-batch="edit">改</button>
       <button class="batch-act" data-batch="move">移</button>
       <button class="batch-act danger" data-batch="del">删</button>
+      <button class="batch-act" id="batchDone">完成</button>
     </div>
     <div class="cat-tools">
       <button class="btn-line" id="newCat">＋ 新建分类</button>
-      <span class="cat-hint">分类可以再分小类；点分类那行的「并入」可把它移动 / 合并到另一个分类</span>
+      <span class="cat-hint">长按词条 / 分类可拖动排序、多选；点分类行的「并入」可移动到另一个分类</span>
+    </div>
     </div>
     <div id="setRows"></div>
   </div>
@@ -2313,10 +2342,11 @@
       <button type="button" class="annot-tab on" data-atab="type">打字</button>
       <button type="button" class="annot-tab" data-atab="draw" title="长按可以把「手写」拖出来，单独一窗">手写</button>
     </div>
-    <button type="button" class="abtn annot-lock" id="annotLock" title="锁定打字内容">锁</button>
     <button class="close-x" id="closeAnnot" aria-label="关闭">×</button>
   </div>
-  <div class="annot-bar">
+  <div class="annot-bar" id="barType">
+    <button type="button" class="abtn annot-lock" id="typeLock" title="锁定打字内容">锁</button>
+    <span class="annot-sep"></span>
     <button type="button" class="cdot on" data-color="#23231f" style="--c:#23231f" title="黑色"></button>
     <button type="button" class="cdot" data-color="#2a5bd7" style="--c:#2a5bd7" title="蓝色"></button>
     <button type="button" class="cdot" data-color="#d3402f" style="--c:#d3402f" title="红色"></button>
@@ -2330,12 +2360,27 @@
     <button type="button" class="bgdot" data-bg="#d8ecff" style="--c:#d8ecff" title="蓝色底色"></button>
     <button type="button" class="bgdot" data-bg="#ffd9d6" style="--c:#ffd9d6" title="红色底色"></button>
     <span class="annot-sep"></span>
-    <button type="button" class="abtn" id="eraserBtn" title="橡皮擦">橡皮</button>
     <button type="button" class="abtn" id="clearAnnot" title="清空这条批注">清空</button>
+  </div>
+  <div class="annot-bar hidden" id="barDraw">
+    <button type="button" class="abtn annot-lock" id="drawLock" title="锁定手写">锁</button>
+    <button type="button" class="abtn" id="laserBtn" title="激光笔：点一下切换，长按选颜色和粗细">激光</button>
+    <span class="annot-sep"></span>
+    <button type="button" class="cdot on" data-color="#23231f" style="--c:#23231f" title="黑色"></button>
+    <button type="button" class="cdot" data-color="#2a5bd7" style="--c:#2a5bd7" title="蓝色"></button>
+    <button type="button" class="cdot" data-color="#d3402f" style="--c:#d3402f" title="红色"></button>
+    <span class="annot-sep"></span>
+    <button type="button" class="abtn" id="dSizeMinus" title="笔细一点">A−</button>
+    <span class="annot-size" id="dSizeNow">16</span>
+    <button type="button" class="abtn" id="dSizePlus" title="笔粗一点">A+</button>
+    <span class="annot-sep"></span>
+    <button type="button" class="abtn" id="eraserBtn" title="橡皮：点一下开/关，长按调大小">橡皮</button>
+    <button type="button" class="abtn" id="clearAnnotDraw" title="清空手写">清空</button>
   </div>
   <div class="annot-body" id="annotBody">
     <div id="annotText" class="annot-text" contenteditable="true" data-ph="写点批注…" spellcheck="false"></div>
     <canvas id="annotCanvas" class="hidden"></canvas>
+    <canvas id="laserCanvas" class="laser-layer"></canvas>
   </div>
   <div class="annot-resize" id="annotResize" title="拖动调整大小"></div>
 </div>
@@ -2352,6 +2397,9 @@
     <button class="close-x" id="afClose" aria-label="收起手写窗">×</button>
   </div>
   <div class="annot-bar">
+    <button type="button" class="abtn annot-lock" id="afLock" title="锁定手写">锁</button>
+    <button type="button" class="abtn" id="afLaser" title="激光笔：点一下切换，长按选颜色和粗细">激光</button>
+    <span class="annot-sep"></span>
     <button type="button" class="cdot on" data-color="#23231f" style="--c:#23231f" title="黑色"></button>
     <button type="button" class="cdot" data-color="#2a5bd7" style="--c:#2a5bd7" title="蓝色"></button>
     <button type="button" class="cdot" data-color="#d3402f" style="--c:#d3402f" title="红色"></button>
@@ -2360,16 +2408,15 @@
     <span class="annot-size" id="afSizeNow">16</span>
     <button type="button" class="abtn" id="afSizePlus" title="笔粗一点">A+</button>
     <span class="annot-sep"></span>
-    <button type="button" class="abtn" id="afEraser" title="橡皮擦">橡皮</button>
-    <button type="button" class="abtn af-esz" data-esz="12" title="细橡皮">小</button>
-    <button type="button" class="abtn af-esz on" data-esz="24" title="中橡皮">中</button>
-    <button type="button" class="abtn af-esz" data-esz="40" title="粗橡皮">大</button>
+    <button type="button" class="abtn" id="afEraser" title="橡皮：点一下开/关，长按调大小">橡皮</button>
     <span class="annot-sep"></span>
     <button type="button" class="abtn" id="afClear" title="清空手写">清空</button>
   </div>
-  <div class="annot-body"><canvas id="annotFloatCanvas"></canvas></div>
+  <div class="annot-body"><canvas id="annotFloatCanvas"></canvas><canvas id="afLaserCanvas" class="laser-layer"></canvas></div>
   <div class="annot-resize" id="afResize" title="拖动调整大小"></div>
 </div>
+
+<div class="tool-pop hidden" id="toolPop"></div>
 
 <!-- ============== 知识库：视途（跨用户迁移） ============== -->
 <div class="modal hidden" id="transitModal">
@@ -9937,8 +9984,6 @@ function renderSetView(){
     shownIdx.push(idx);
   });
 
-  $('#setMulti').classList.toggle('on', setSelOn);
-  $('#setMulti').textContent = setSelOn ? '退出多选' : '多选';
   const bar = $('#batchBar');
   bar.classList.toggle('hidden', !setSelOn);
   if(setSelOn){
@@ -9967,7 +10012,7 @@ function renderSetView(){
     row.className = 'row-item' + (setSelOn && picked ? ' picked' : '');
     row.dataset.idx = idx;
     row.innerHTML =
-      (setSelOn ? '<label class="sel"><input type="checkbox" data-sel="' + idx + '"' + (picked ? ' checked' : '') + '></label>' : '') +
+      (setSelOn ? '<span class="dh" title="按住拖动排序">⠿</span><label class="sel"><input type="checkbox" data-sel="' + idx + '"' + (picked ? ' checked' : '') + '></label>' : '') +
       '<div class="en" data-say="' + escapeHtml(it.en) + '" title="点一下朗读">' + escapeHtml(it.en) + '</div>' +
       '<div class="zh"' + (it.zh ? ' data-say="' + escapeHtml(it.zh) + '" title="点一下朗读释义"' : '') + '>' + escapeHtml(it.zh || '') +
         (it.pos ? '<div class="si-meta">' + escapeHtml(it.pos) + '</div>' : '') +
@@ -9987,6 +10032,7 @@ function renderSetView(){
     el.className = 'cat-head' + (depth ? ' child' : '');
     el.dataset.cat = cat.id;
     el.innerHTML =
+      (setSelOn ? '<span class="dh" title="按住拖动：拖到朋友身上成为小分类">⠿</span>' : '') +
       '<span class="nm">' + escapeHtml(cat.name) + '</span>' +
       '<span class="cnt">' + n + ' 条</span>' +
       '<div class="acts"><button data-catact="rename">改名</button><button data-catact="merge">并入</button><button data-catact="del" class="danger">删除</button></div>';
@@ -10347,11 +10393,6 @@ function openBatchEdit(idxs){
   showModal($('#batchEditModal'));
 }
 
-$('#setMulti').addEventListener('click', () => {
-  setSelOn = !setSelOn;
-  if(!setSelOn) setPicked.clear();
-  renderSetView();
-});
 $('#setMove').addEventListener('click', openSetMoveModal);
 $('#newSetChip').addEventListener('click', openNewSetModal);
 $('#newSetChip').addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); openNewSetModal(); } });
@@ -10391,6 +10432,7 @@ $('#batchBar').addEventListener('click', (e) => {
   const btn = e.target.closest('.batch-act');
   if(!btn) return;
   const act = btn.dataset.batch;
+  if(!act) return;
   const set = getSetById(manageSetId);
   if(!set) return;
   const idxs = Array.from(setPicked).filter(i => set.items[i]);
@@ -10410,8 +10452,254 @@ $('#batchBar').addEventListener('click', (e) => {
   }
 });
 
-$('#doBatchEdit').addEventListener('click', () => {
-  const ed = ensureEditableSet();
+/* ============ 长按：进入整理模式；拖动：排序 / 改归属 ============ */
+let setLpTimer = 0, setDrag = null;
+function clearDropMarks(){
+  $$('#setRows .drop-before, #setRows .drop-after, #setRows .drop-into').forEach(el => {
+    el.classList.remove('drop-before', 'drop-after', 'drop-into');
+  });
+}
+function setEnterSortMode(fromRow){
+  if(setSelOn) return;
+  setSelOn = true;
+  if(fromRow && fromRow.dataset.idx != null) setPicked.add(Number(fromRow.dataset.idx));
+  renderSetView();
+  toast('整理模式：按住拖动排序，点勾可多选');
+}
+$('#setRows').addEventListener('pointerdown', (e) => {
+  if(e.pointerType === 'mouse' && e.button !== 0) return;
+  const row = e.target.closest('.row-item');
+  const head = e.target.closest('.cat-head');
+  if(!row && !head) return;
+  const onCtrl = e.target.closest('button, input, label.sel, [data-act], [data-catact]');
+  const onHandle = e.target.closest('.dh');
+  if(onCtrl && !onHandle) return;
+  if(!setSelOn){
+    clearTimeout(setLpTimer);
+    setLpTimer = setTimeout(() => {
+      setLpTimer = 0;
+      setEnterSortMode(row);
+    }, 460);
+    return;
+  }
+  // 已在整理模式：按住就能拖
+  setDrag = {
+    kind: head ? 'cat' : 'item',
+    src: head || row,
+    id: head ? head.dataset.cat : row.dataset.idx,
+    x: e.clientX, y: e.clientY, moved: false,
+    target: null, mode: ''
+  };
+  try{ (head || row).setPointerCapture(e.pointerId); }catch(err){}
+});
+$('#setRows').addEventListener('pointermove', (e) => {
+  if(setLpTimer){
+    if(e.movementX && Math.abs(e.movementX) + Math.abs(e.movementY) > 8){ clearTimeout(setLpTimer); setLpTimer = 0; }
+    return;
+  }
+  if(!setDrag) return;
+  if(!setDrag.moved){
+    setDrag.moved = true;
+    setDrag.src.classList.add('drag-src');
+  }
+  e.preventDefault();
+  clearDropMarks();
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const h2 = el && el.closest('#setRows .cat-head');
+  const r2 = el && el.closest('#setRows .row-item');
+  setDrag.target = null; setDrag.mode = '';
+  if(setDrag.kind === 'item'){
+    if(r2 && r2 !== setDrag.src && r2.dataset.idx != null){
+      const rect = r2.getBoundingClientRect();
+      setDrag.target = r2;
+      setDrag.mode = (e.clientY < rect.top + rect.height / 2) ? 'before' : 'after';
+      r2.classList.add(setDrag.mode === 'before' ? 'drop-before' : 'drop-after');
+    }else if(h2 && h2 !== setDrag.src){
+      setDrag.target = h2;
+      setDrag.mode = 'into';
+      h2.classList.add('drop-into');
+    }
+  }else{
+    if(h2 && h2 !== setDrag.src && h2.dataset.cat){
+      const rect = h2.getBoundingClientRect();
+      const banned = catDescendantsOf(getSetById(manageSetId), setDrag.id);
+      banned.add(setDrag.id);
+      setDrag.target = h2;
+      if(!banned.has(h2.dataset.cat) && e.clientY > rect.top + rect.height * 0.56){
+        setDrag.mode = 'into'; h2.classList.add('drop-into');
+      }else{
+        setDrag.mode = 'before'; h2.classList.add('drop-before');
+      }
+    }else if(!h2 && !r2){
+      setDrag.target = null; setDrag.mode = 'top';
+    }
+  }
+}, { passive: false });
+function setDragFinish(){
+  clearTimeout(setLpTimer); setLpTimer = 0;
+  if(!setDrag) return;
+  const d = setDrag;
+  setDrag = null;
+  clearDropMarks();
+  if(d.src) d.src.classList.remove('drag-src');
+  if(!d.moved) return;
+  const ed = editableSetById(manageSetId);
+  if(!ed) return;
+  if(d.kind === 'item'){
+    const idx = Number(d.id);
+    if(!ed.items[idx]) return;
+    const item = ed.items[idx];
+    let anchorIdx = -1, cat = item.cat || '';
+    if(d.mode === 'into' && d.target && d.target.dataset.cat != null){
+      cat = d.target.dataset.cat || '';
+      anchorIdx = -1;
+    }else if(d.target && d.target.dataset.idx != null){
+      anchorIdx = Number(d.target.dataset.idx);
+      cat = ed.items[anchorIdx] ? (ed.items[anchorIdx].cat || '') : cat;
+    }else{
+      return;
+    }
+    const anchor = anchorIdx >= 0 ? ed.items[anchorIdx] : null;
+    ed.items.splice(idx, 1);
+    item.cat = cat;
+    if(anchor && ed.items.indexOf(anchor) >= 0){
+      const at = ed.items.indexOf(anchor) + (d.mode === 'after' ? 1 : 0);
+      ed.items.splice(at, 0, item);
+    }else if(d.mode === 'into'){
+      let last = -1;
+      ed.items.forEach((x, i) => { if((x.cat || '') === cat) last = i; });
+      ed.items.splice(last + 1, 0, item);
+    }else{
+      ed.items.splice(idx, 0, item);
+    }
+  }else{
+    const cid = d.id;
+    const cats = ensureCats(ed);
+    const si = cats.findIndex(c => c.id === cid);
+    if(si < 0) return;
+    const cat = cats[si];
+    if(d.mode === 'into' && d.target && d.target.dataset.cat){
+      const tid = d.target.dataset.cat;
+      const banned = catDescendantsOf(getSetById(manageSetId), cid);
+      banned.add(cid);
+      if(banned.has(tid)) return;
+      cats.splice(si, 1);
+      cat.parent = tid;
+      cats.push(cat);
+    }else if(d.mode === 'before' && d.target && d.target.dataset.cat){
+      const tid = d.target.dataset.cat;
+      const ti = cats.findIndex(c => c.id === tid);
+      if(ti < 0) return;
+      const tp = cats[ti].parent || '';
+      cats.splice(si, 1);
+      cat.parent = tp;
+      const nti = cats.findIndex(c => c.id === tid);
+      cats.splice(nti, 0, cat);
+    }else{
+      cats.splice(si, 1);
+      cat.parent = '';
+      cats.push(cat);
+    }
+  }
+  save();
+  renderSetView();
+  renderMenu();
+  toast('顺序 / 归属已更新');
+}
+$('#setRows').addEventListener('pointerup', () => {
+  if(setLpTimer){ clearTimeout(setLpTimer); setLpTimer = 0; return; }
+  setDragFinish();
+});
+$('#setRows').addEventListener('pointercancel', () => {
+  clearTimeout(setLpTimer); setLpTimer = 0;
+  if(setDrag){ const s = setDrag.src; setDrag = null; clearDropMarks(); if(s) s.classList.remove('drag-src'); }
+});
+$('#setRows').addEventListener('pointerleave', () => { clearTimeout(setLpTimer); setLpTimer = 0; });
+
+/* 完成：退出整理模式 */
+$('#batchDone').addEventListener('click', () => {
+  setSelOn = false;
+  setPicked.clear();
+  renderSetView();
+  toast('已退出整理模式');
+});
+
+/* 菜单：长按知识库行 → 拖动排序 */
+let setOrderMode = false, menuDrag = null, menuLpTimer = 0;
+$('#setList').addEventListener('pointerdown', (e) => {
+  if(e.pointerType === 'mouse' && e.button !== 0) return;
+  const li = e.target.closest('li.set-row');
+  if(!li || e.target.closest('button')) return;
+  if(!setOrderMode){
+    clearTimeout(menuLpTimer);
+    menuLpTimer = setTimeout(() => {
+      menuLpTimer = 0;
+      setOrderMode = true;
+      $('#setOrderBar').classList.remove('hidden');
+      toast('知识库排序：按住上下拖动，松手生效');
+    }, 460);
+    return;
+  }
+  menuDrag = { li: li, id: li.dataset.id, y: e.clientY, moved: false };
+  try{ li.setPointerCapture(e.pointerId); }catch(err){}
+});
+$('#setList').addEventListener('pointermove', (e) => {
+  if(menuLpTimer){
+    if(e.movementX && Math.abs(e.movementX) + Math.abs(e.movementY) > 8){ clearTimeout(menuLpTimer); menuLpTimer = 0; }
+    return;
+  }
+  if(!menuDrag) return;
+  e.preventDefault();
+  if(!menuDrag.moved){ menuDrag.moved = true; menuDrag.li.classList.add('drag-src'); }
+  clearDropMarks();
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const t = el && el.closest('#setList li.set-row');
+  if(t && t !== menuDrag.li){
+    const rect = t.getBoundingClientRect();
+    menuDrag.target = t;
+    menuDrag.mode = (e.clientY < rect.top + rect.height / 2) ? 'before' : 'after';
+    t.classList.add(menuDrag.mode === 'before' ? 'drop-before' : 'drop-after');
+  }else{
+    menuDrag.target = null;
+  }
+}, { passive: false });
+function menuDragFinish(){
+  clearTimeout(menuLpTimer); menuLpTimer = 0;
+  if(!menuDrag) return;
+  const d = menuDrag; menuDrag = null;
+  clearDropMarks();
+  if(d.li) d.li.classList.remove('drag-src');
+  if(!d.moved || !d.target) return;
+  const arr = state.customSets;
+  const si = arr.findIndex(x => x.id === d.id);
+  if(si < 0) return;
+  const moved = arr.splice(si, 1)[0];
+  let at = arr.findIndex(x => x.id === d.target.dataset.id);
+  if(at < 0) at = arr.length;
+  arr.splice(at + (d.mode === 'after' ? 1 : 0), 0, moved);
+  save();
+  renderMenu();
+  toast('知识库顺序已更新');
+}
+$('#setList').addEventListener('pointerup', () => {
+  if(menuLpTimer){ clearTimeout(menuLpTimer); menuLpTimer = 0; return; }
+  menuDragFinish();
+});
+$('#setList').addEventListener('pointercancel', () => {
+  clearTimeout(menuLpTimer); menuLpTimer = 0;
+  if(menuDrag){ const l = menuDrag.li; menuDrag = null; clearDropMarks(); if(l) l.classList.remove('drag-src'); }
+});
+$('#setOrderDone').addEventListener('click', () => {
+  setOrderMode = false;
+  $('#setOrderBar').classList.add('hidden');
+  toast('已退出知识库排序');
+});
+/* 排序模式下点一下不算"打开知识库"，避免拖完顺手跳走 */
+$('#setList').addEventListener('click', (e) => {
+  if(setOrderMode){ e.preventDefault(); e.stopPropagation(); }
+}, true);
+
+$('#doBatchEdit').addEventListener('click', () => {  const ed = ensureEditableSet();
   if(!ed) return;
   const pos = $('#bePos').value;
   const root = $('#beRoot').value.trim();
@@ -11439,25 +11727,51 @@ let annotInkColor = '#23231f';   // 手写浮窗的笔色，与打字窗字色�
 let annotSize = 16;
 let annotPenSize = 16;       // 手写浮窗的笔粗细
 let annotEraseSize = 24;     // 橡皮半径（屏幕 px）
-let annotPenOnly = false;    // 手写浮窗的「电容笔」模式：只认笔/鼠标，手指不落笔
+let annotPenOnly = false;    // 手写笔保护：只认笔/鼠标，手指不落笔
 let annotPenOnlyTiped = false;
-let annotLock = false;       // 打字窗口锁定后不能改内容
+let annotPenAutoTiped = false;
+let annotLockType = false;   // 打字锁（全局联动）
+let annotLockDraw = false;   // 手写锁（全局联动）
 let annotErase = false;
 let annotTab = 'type';
 let annotStrokes = [];       // [{c, w, pts:[{x,y}]}] x,y 归一化
 let annotCur = null;
 let annotSaveTimer = 0;
 let annotPlaced = false;
+let laserOn = false;         // 激光笔按钮
+let laserColor = '#e02b2b';  // 激光默认红
+let laserW = 5;
+let laserTrail = [];         // [{x,y,t}] 归一化坐标
+let laserRAF = 0;
 
 const annotPanel = $('#annotPanel');
 const annotDrag = $('#annotDrag');
 const annotResize = $('#annotResize');
 const annotTextEl = $('#annotText');
 const annotCanvasEl = $('#annotCanvas');
+const annotLaserEl = $('#laserCanvas');
 const annotFloatEl = $('#annotDrawFloat');
 const annotFloatCanvas = $('#annotFloatCanvas');
+const afLaserEl = $('#afLaserCanvas');
 const annotFloatCtx = (annotFloatCanvas && annotFloatCanvas.getContext) ? annotFloatCanvas.getContext('2d') : null;
 const annotCtx = annotCanvasEl.getContext ? annotCanvasEl.getContext('2d') : null;
+const annotLaserCtx = annotLaserEl && annotLaserEl.getContext ? annotLaserEl.getContext('2d') : null;
+const afLaserCtx = afLaserEl && afLaserEl.getContext ? afLaserEl.getContext('2d') : null;
+
+/* —— 工具偏好：打字 / 手写各自一套，下次沿用上次的选择 —— */
+const ANNOT_PREF_DEFAULT = { tColor:'#23231f', tSize:16, dInk:'#23231f', dPen:16, dEsz:24, laser:'#e02b2b', laserW:5, penOnly:false };
+function annotPrefs(){
+  if(!state.settings) state.settings = {};
+  if(!state.settings.annotPrefs || typeof state.settings.annotPrefs !== 'object') state.settings.annotPrefs = {};
+  Object.keys(ANNOT_PREF_DEFAULT).forEach(k => {
+    if(state.settings.annotPrefs[k] == null) state.settings.annotPrefs[k] = ANNOT_PREF_DEFAULT[k];
+  });
+  return state.settings.annotPrefs;
+}
+function annotPrefSet(k, v){
+  annotPrefs()[k] = v;
+  save();
+}
 
 /* —— 画布：主窗与手写浮窗共用一套笔迹 —— */
 function annotCtxOf(el){ return el === annotFloatCanvas ? annotFloatCtx : annotCtx; }
@@ -11470,6 +11784,11 @@ function annotSetupCanvasOne(el){
   const r = Math.min(2, window.devicePixelRatio || 1);
   el.width = Math.round(w * r);
   el.height = Math.round(h * r);
+  const lc = (el === annotFloatCanvas) ? afLaserEl : annotLaserEl;
+  if(lc){
+    lc.width = Math.round((lc.clientWidth || w) * r);
+    lc.height = Math.round((lc.clientHeight || h) * r);
+  }
   annotDrawAll();
 }
 function annotSetupCanvas(){
@@ -11557,7 +11876,7 @@ function annotEsc(s){
 }
 /* 选中文字后改颜色 / 底色；没有选中就当作「接下来打的字用什么颜色」 */
 function annotApplyToSelection(kind, value){
-  if(annotLock) return false;
+  if(annotLockType) return false;
   const sel = window.getSelection ? window.getSelection() : null;
   if(!sel || !sel.rangeCount || sel.isCollapsed) return false;
   const r = sel.getRangeAt(0);
@@ -11591,7 +11910,8 @@ function annotSave(skipRender){
     ink: annotInkColor,
     pen: annotPenSize,
     esz: annotEraseSize,
-    lock: !!annotLock,
+    lock: !!annotLockType,
+    lockDraw: !!annotLockDraw,
     strokes: annotStrokes.map(s => ({
       c: s.c, w: s.w, pts: s.pts.map(p => ({ x: +p.x.toFixed(4), y: +p.y.toFixed(4) }))
     })),
@@ -11612,15 +11932,22 @@ function annotSyncUI(){
   });
   annotTextEl.classList.toggle('hidden', annotTab !== 'type');
   annotCanvasEl.classList.toggle('hidden', annotTab !== 'draw');
-  annotTextEl.classList.toggle('locked', !!annotLock);
-  annotTextEl.contentEditable = annotLock ? 'false' : 'true';
-  const lockBtn = $('#annotLock');
-  if(lockBtn){ lockBtn.classList.toggle('on', !!annotLock); lockBtn.textContent = annotLock ? '已锁' : '锁'; }
-  const af = $('#afEraser');
-  if(af){ af.classList.toggle('on', annotErase); af.textContent = annotErase ? '橡皮(开)' : '橡皮'; }
+  const bt = $('#barType'), bd = $('#barDraw');
+  if(bt) bt.classList.toggle('hidden', annotTab !== 'type');
+  if(bd) bd.classList.toggle('hidden', annotTab !== 'draw');
+  // 打字锁
+  annotTextEl.classList.toggle('locked', !!annotLockType);
+  annotTextEl.contentEditable = annotLockType ? 'false' : 'true';
+  [['#typeLock', annotLockType], ['#drawLock', annotLockDraw], ['#afLock', annotLockDraw]].forEach(([sel, on]) => {
+    const b = $(sel);
+    if(b){ b.classList.toggle('on', !!on); b.textContent = on ? '已锁' : '锁'; }
+  });
+  const er = $('#eraserBtn'), af = $('#afEraser');
+  [er, af].forEach(b => { if(b){ b.classList.toggle('on', annotErase); b.textContent = annotErase ? '橡皮(开)' : '橡皮'; } });
+  const lb = $('#laserBtn'), la = $('#afLaser');
+  [lb, la].forEach(b => { if(b){ b.classList.toggle('on', !!laserOn); b.textContent = laserOn ? '激光(开)' : '激光'; } });
   if(annotFloatEl){
     annotFloatEl.querySelectorAll('.cdot').forEach(d => d.classList.toggle('on', d.dataset.color === annotInkColor));
-    annotFloatEl.querySelectorAll('.af-esz').forEach(b => b.classList.toggle('on', +b.dataset.esz === annotEraseSize));
     const fsz = $('#afSizeNow');
     if(fsz) fsz.textContent = String(annotPenSize);
     const bpo = $('#afPenOnly');
@@ -11628,13 +11955,14 @@ function annotSyncUI(){
   }
   annotUpdateUndoBtns();
   $('#sizeNow').textContent = String(annotSize);
+  const dn = $('#dSizeNow');
+  if(dn) dn.textContent = String(annotPenSize);
   annotTextEl.style.fontSize = annotSize + 'px';
   annotTextEl.style.color = annotColor;
-  annotPanel.querySelectorAll('.cdot').forEach(d => {
-    d.classList.toggle('on', d.dataset.color === annotColor);
-  });
-  $('#eraserBtn').classList.toggle('on', annotErase);
-  $('#eraserBtn').textContent = annotErase ? '橡皮(开)' : '橡皮';
+  const tbox = $('#barType');
+  if(tbox) tbox.querySelectorAll('.cdot').forEach(d => d.classList.toggle('on', d.dataset.color === annotColor));
+  const dbox = $('#barDraw');
+  if(dbox) dbox.querySelectorAll('.cdot').forEach(d => d.classList.toggle('on', d.dataset.color === annotInkColor));
 }
 
 /* —— 打开 / 关闭 —— */
@@ -11648,13 +11976,18 @@ function openAnnot(item, el){
   annotTextEl.innerHTML = rec
     ? (rec.html ? annotSanitize(rec.html) : annotEsc(rec.text || '').replace(/\n/g, '<br>'))
     : '';
-  annotSize = rec && rec.size ? Math.min(32, Math.max(12, rec.size)) : 16;
-  annotColor = rec && rec.color ? rec.color : '#23231f';
-  annotInkColor = rec && rec.ink ? rec.ink : '#23231f';
-  annotPenSize = rec && rec.pen ? Math.min(40, Math.max(6, rec.pen)) : 16;
-  annotEraseSize = rec && rec.esz ? Math.min(60, Math.max(8, rec.esz)) : 24;
+  // 工具状态沿用上次自己挑的（打字 / 手写各自一套），不再跟着某条批注走
+  const pf = annotPrefs();
+  annotSize = Math.min(32, Math.max(12, pf.tSize || 16));
+  annotColor = pf.tColor || '#23231f';
+  annotInkColor = pf.dInk || '#23231f';
+  annotPenSize = Math.min(40, Math.max(6, pf.dPen || 16));
+  annotEraseSize = Math.min(60, Math.max(8, pf.dEsz || 24));
+  laserColor = pf.laser || '#e02b2b';
+  laserW = Math.min(16, Math.max(2, pf.laserW || 5));
+  annotPenOnly = !!pf.penOnly;
   annotErase = false;
-  annotLock = !!(rec && rec.lock);
+  laserOn = false;
   annotHistReset();
   // 手写浮窗是同级独立窗口：切换/重开批注时不收起，只有它自己的 × 或彻底退出批注模式才关
   const w = item.en || '';
@@ -11753,55 +12086,52 @@ $('#annotRedo').addEventListener('click', () => annotUndoAct(true));
 $('#afUndo').addEventListener('click', () => { annotLastSurface = 'draw'; annotUndoAct(false); });
 $('#afRedo').addEventListener('click', () => { annotLastSurface = 'draw'; annotUndoAct(true); });
 
-/* 打字锁 */
-$('#annotLock').addEventListener('click', () => {
-  annotLock = !annotLock;
+/* 打字锁 / 手写锁：各自独立，但同一种锁在全部窗口里联动 */
+function setAnnotLock(kind){
+  const on = kind === 'type' ? !annotLockType : !annotLockDraw;
+  if(kind === 'type') annotLockType = on; else annotLockDraw = on;
   annotSyncUI();
   annotSave(true);
-  toast(annotLock ? '打字窗口已锁，内容不能再改' : '打字窗口已解锁');
-});
+  commitAnnotLocks();
+  toast(kind === 'type'
+    ? (on ? '打字窗已锁，所有词的打字内容都不能改了' : '打字窗已解锁')
+    : (on ? '手写窗已锁，所有手写都不能再画、再擦' : '手写窗已解锁'));
+}
+$('#typeLock').addEventListener('click', () => setAnnotLock('type'));
+$('#drawLock').addEventListener('click', () => setAnnotLock('draw'));
+$('#afLock').addEventListener('click', () => setAnnotLock('draw'));
 
 /* 手写浮窗按钮 */
 $('#afClose').addEventListener('click', () => { annotFloatCloseWin(); toast('手写窗已收起'); });
-$('#afEraser').addEventListener('click', () => { annotErase = !annotErase; annotSyncUI(); });
-$('#afClear').addEventListener('click', () => {
-  annotStrokes = [];
-  annotCur = null;
-  annotHistPush();
-  annotDrawAll();
-  annotSyncUI();
-  annotSave(true);
-  toast('已清空手写');
-});
+$('#afEraser').addEventListener('click', () => toggleAnnotEraser('#afEraser'));
+$('#afClear').addEventListener('click', clearDrawAll);
 
-/* 手写浮窗：颜色 / 笔粗细 / 橡皮大小（笔色与打字窗字色互不影响） */
+/* 手写浮窗：颜色 / 笔粗细（笔色与打字窗字色互不影响） */
 annotFloatEl.querySelectorAll('.cdot').forEach(d => {
   d.addEventListener('click', () => {
     annotInkColor = d.dataset.color;
+    annotPrefSet('dInk', annotInkColor);
     annotSyncUI();
     annotSave(true);
   });
 });
 $('#afSizeMinus').addEventListener('click', () => {
   annotPenSize = Math.max(6, annotPenSize - 2);
+  annotPrefSet('dPen', annotPenSize);
   annotSyncUI(); annotSave(true);
 });
 $('#afSizePlus').addEventListener('click', () => {
   annotPenSize = Math.min(40, annotPenSize + 2);
+  annotPrefSet('dPen', annotPenSize);
   annotSyncUI(); annotSave(true);
 });
-annotFloatEl.querySelectorAll('.af-esz').forEach(b => {
-  b.addEventListener('click', () => {
-    annotEraseSize = +b.dataset.esz;
-    annotSyncUI(); annotSave(true);
-  });
-});
-/* 电容笔模式：只认触控笔/鼠标，手指不落笔 */
+/* 手写笔保护：只认触控笔/鼠标，手指不落笔 */
 $('#afPenOnly').addEventListener('click', () => {
   annotPenOnly = !annotPenOnly;
   annotPenOnlyTiped = false;
+  annotPrefSet('penOnly', annotPenOnly);
   annotSyncUI();
-  toast(annotPenOnly ? '电容笔模式已开：只有触控笔（或鼠标）能写，手指不落笔' : '电容笔模式已关：手指和触控笔都能写');
+  toast(annotPenOnly ? '手写笔保护已开：只有触控笔（或鼠标）能写，手指不落笔' : '手写笔保护已关：手指和触控笔都能写');
 });
 
 /* 手写浮窗：拖动右下角调大小 */
@@ -11832,11 +12162,12 @@ if(afResize){
   afResize.addEventListener('pointercancel', afRzEnd);
 }
 
-/* 颜色：先看有没有选中文字，选中就改那段，没选就改默认字色 */
-annotPanel.querySelectorAll('.cdot').forEach(d => {
+/* 颜色：先看有没有选中文字，选中就改那段，没选就改默认字色（只作用打字栏） */
+$('#barType').querySelectorAll('.cdot').forEach(d => {
   d.addEventListener('click', () => {
     annotColor = d.dataset.color;
-    annotPanel.querySelectorAll('.cdot').forEach(x => x.classList.toggle('on', x === d));
+    annotPrefSet('tColor', annotColor);
+    $('#barType').querySelectorAll('.cdot').forEach(x => x.classList.toggle('on', x === d));
     if(!annotApplyToSelection('color', annotColor)){
       annotTextEl.style.color = annotColor;
       annotSyncUI();
@@ -11844,49 +12175,136 @@ annotPanel.querySelectorAll('.cdot').forEach(d => {
   });
 });
 /* 底色：只作用于选中的那段文字 */
-annotPanel.querySelectorAll('.bgdot').forEach(d => {
+$('#barType').querySelectorAll('.bgdot').forEach(d => {
   d.addEventListener('click', () => {
     const v = d.dataset.bg || '';
     if(!annotApplyToSelection('bg', v)){ toast('先选中一段文字，再点底色'); return; }
-    annotPanel.querySelectorAll('.bgdot').forEach(x => x.classList.toggle('on', x === d));
+    $('#barType').querySelectorAll('.bgdot').forEach(x => x.classList.toggle('on', x === d));
   });
 });
 
-/* 字号 */
+/* 字号（打字栏） */
 $('#sizeMinus').addEventListener('click', () => {
   annotSize = Math.max(12, annotSize - 2);
+  annotPrefSet('tSize', annotSize);
   annotSyncUI();
   annotSave(true);
 });
 $('#sizePlus').addEventListener('click', () => {
   annotSize = Math.min(32, annotSize + 2);
+  annotPrefSet('tSize', annotSize);
   annotSyncUI();
   annotSave(true);
 });
 
-/* 橡皮 */
-$('#eraserBtn').addEventListener('click', () => {
-  annotErase = !annotErase;
-  annotSyncUI();
+/* 手写栏：颜色 / 笔粗细（和打字栏完全独立） */
+$('#barDraw').querySelectorAll('.cdot').forEach(d => {
+  d.addEventListener('click', () => {
+    annotInkColor = d.dataset.color;
+    annotPrefSet('dInk', annotInkColor);
+    annotSyncUI(); annotSave(true);
+  });
+});
+$('#dSizeMinus').addEventListener('click', () => {
+  annotPenSize = Math.max(6, annotPenSize - 2);
+  annotPrefSet('dPen', annotPenSize);
+  annotSyncUI(); annotSave(true);
+});
+$('#dSizePlus').addEventListener('click', () => {
+  annotPenSize = Math.min(40, annotPenSize + 2);
+  annotPrefSet('dPen', annotPenSize);
+  annotSyncUI(); annotSave(true);
 });
 
-/* 清空：只清当前这一栏，打字和手写互不影响 */
+/* 橡皮：点一下开/关，长按选大小（像素擦除，只擦碰到的那一段） */
+function toggleAnnotEraser(btn){
+  if(annotLockDraw){ toast('手写已锁，先解锁再用橡皮'); return; }
+  annotErase = !annotErase;
+  annotSyncUI();
+  toast(annotErase ? '橡皮已开：滑过哪里就擦掉哪里' : '橡皮已关');
+}
+$('#eraserBtn').addEventListener('click', () => toggleAnnotEraser($('#eraserBtn')));
+$('#clearAnnotDraw').addEventListener('click', clearDrawAll);
 $('#clearAnnot').addEventListener('click', () => {
-  if(annotTab === 'draw'){
-    annotStrokes = [];
-    annotCur = null;
-    annotHistPush();
-    annotDrawAll();
-    annotSyncUI();
-    annotSave(true);
-    toast('已清空手写');
-    return;
-  }
+  if(annotLockType){ toast('打字窗已锁，先解锁再清空'); return; }
   annotTextEl.innerHTML = '';
   annotSyncUI();
   annotSave(true);
   toast('已清空打字');
 });
+
+/* 激光笔：点一下切换，长按选颜色和粗细 */
+$('#laserBtn').addEventListener('click', () => {
+  laserOn = !laserOn;
+  annotSyncUI();
+  toast(laserOn ? '激光笔已开：在窗口里滑动就是一道会消退的光' : '激光笔已关');
+});
+$('#afLaser').addEventListener('click', () => {
+  laserOn = !laserOn;
+  annotSyncUI();
+  toast(laserOn ? '激光笔已开：在窗口里滑动就是一道会消退的光' : '激光笔已关');
+});
+
+/* 长按工具按钮 → 弹出小面板 */
+const toolPop = $('#toolPop');
+function closeToolPop(){ if(toolPop) toolPop.classList.add('hidden'); }
+function showToolPop(anchor, kind){
+  if(!toolPop || !anchor) return;
+  const r = anchor.getBoundingClientRect();
+  let html = '';
+  if(kind === 'eraser'){
+    html = '<div class="tp-row"><span class="tp-lab">粗细</span>' +
+      [['细', 10], ['中', 24], ['粗', 40]].map(([n, v]) =>
+        '<button class="tp-btn' + (annotEraseSize === v ? ' on' : '') + '" data-esz="' + v + '">' + n + '</button>').join('') +
+      '</div>';
+  }else{
+    html = '<div class="tp-row"><span class="tp-lab">颜色</span>' +
+      [['#e02b2b', '红'], ['#8b3fd9', '紫']].map(([c, n]) =>
+        '<button class="tp-dot' + (laserColor === c ? ' on' : '') + '" data-lc="' + c + '" style="--c:' + c + '" title="' + n + '"></button>').join('') +
+      '</div><div class="tp-row"><span class="tp-lab">粗细</span>' +
+      [['细', 2], ['中', 5], ['粗', 9]].map(([n, v]) =>
+        '<button class="tp-btn' + (laserW === v ? ' on' : '') + '" data-lw="' + v + '">' + n + '</button>').join('') +
+      '</div>';
+  }
+  toolPop.innerHTML = html;
+  toolPop.classList.remove('hidden');
+  toolPop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 190)) + 'px';
+  toolPop.style.top = Math.max(8, r.bottom + 6) + 'px';
+  toolPop.querySelectorAll('[data-esz]').forEach(b => b.addEventListener('click', () => {
+    annotEraseSize = +b.dataset.esz;
+    annotPrefSet('dEsz', annotEraseSize);
+    annotSyncUI(); annotSave(true); closeToolPop();
+  }));
+  toolPop.querySelectorAll('[data-lc]').forEach(b => b.addEventListener('click', () => {
+    laserColor = b.dataset.lc;
+    annotPrefSet('laser', laserColor); annotSyncUI(); closeToolPop();
+  }));
+  toolPop.querySelectorAll('[data-lw]').forEach(b => b.addEventListener('click', () => {
+    laserW = +b.dataset.lw;
+    annotPrefSet('laserW', laserW); annotSyncUI(); closeToolPop();
+  }));
+}
+/* 长按绑定：按住 520ms 弹面板；手指一松开就取消 */
+function bindToolLongPress(el, fn){
+  if(!el) return;
+  let tm = 0, fired = false;
+  el.addEventListener('pointerdown', (e) => {
+    fired = false;
+    clearTimeout(tm);
+    tm = setTimeout(() => { fired = true; fn(); }, 520);
+  });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev =>
+    el.addEventListener(ev, () => { clearTimeout(tm); tm = 0; }));
+  el.addEventListener('click', (e) => { if(fired){ e.stopPropagation(); e.preventDefault(); fired = false; } }, true);
+}
+bindToolLongPress($('#eraserBtn'), () => showToolPop($('#eraserBtn'), 'eraser'));
+bindToolLongPress($('#afEraser'), () => showToolPop($('#afEraser'), 'eraser'));
+bindToolLongPress($('#laserBtn'), () => showToolPop($('#laserBtn'), 'laser'));
+bindToolLongPress($('#afLaser'), () => showToolPop($('#afLaser'), 'laser'));
+document.addEventListener('pointerdown', (e) => {
+  if(toolPop && !toolPop.classList.contains('hidden') && !e.target.closest('#toolPop') && !e.target.closest('button'))
+    closeToolPop();
+}, true);
 
 /* 文本输入 */
 annotTextEl.addEventListener('input', () => { annotLastSurface = 'type'; annotQueueSave(); });
@@ -11911,29 +12329,66 @@ function annotPtOn(el, e){
 }
 function annotPenWidth(e, el){
   // 压感（Pencil 支持时）微调宽度，无压感时按笔粗细换算
-  const src = (el === annotFloatCanvas) ? annotPenSize : annotSize;
+  const src = annotPenSize;
   const base = Math.max(1.2, Math.min(9, src / 5));
   if(e && typeof e.pressure === 'number' && e.pressure > 0 && e.pointerType === 'pen'){
     return base * (0.6 + e.pressure * 0.8);
   }
   return base;
 }
+/* 像素擦除：碰到哪里就擦掉哪里，整笔没擦到就保留，擦断的笔迹自动拆成几段 */
 function annotEraseAt(p, el){
-  const r = annotEraseSize / Math.max(1, (el || annotCanvasEl).clientWidth);
-  let hit = -1;
-  for(let i=annotStrokes.length-1;i>=0;i--){
-    const pts = annotStrokes[i].pts || [];
-    for(const q of pts){
-      if(Math.abs(q.x - p.x) <= r && Math.abs(q.y - p.y) <= r){ hit = i; break; }
-    }
-    if(hit >= 0) break;
-  }
-  if(hit >= 0){
-    annotStrokes.splice(hit, 1);
+  const elW = Math.max(1, (el || annotCanvasEl).clientWidth);
+  const elH = Math.max(1, (el || annotCanvasEl).clientHeight);
+  const r = annotEraseSize / 2 / elW;
+  const ry = annotEraseSize / 2 / elH;
+  let changed = false;
+  const out = [];
+  annotStrokes.forEach(s => {
+    const pts = s.pts || [];
+    const keep = [];
+    const segs = [];
+    pts.forEach(q => {
+      const inside = Math.abs(q.x - p.x) <= r && Math.abs(q.y - p.y) <= ry;
+      if(inside){
+        changed = true;
+        if(keep.length >= 1) segs.push(keep.slice());
+        keep.length = 0;
+      }else{
+        keep.push(q);
+      }
+    });
+    if(keep.length >= 1) segs.push(keep.slice());
+    if(!segs.length) return;   // 整笔都被擦掉了
+    if(segs.length === 1 && segs[0].length === pts.length){ out.push(s); return; }
+    segs.forEach(g => out.push({ c: s.c, w: s.w, pts: g }));
+  });
+  if(changed){
+    annotStrokes = out;
     annotHistPush();
     annotDrawAll();
     annotSave(true);
   }
+}
+function clearDrawAll(){
+  if(annotLockDraw){ toast('手写已锁，先解锁再清空'); return; }
+  annotStrokes = [];
+  annotCur = null;
+  annotHistPush();
+  annotDrawAll();
+  annotSyncUI();
+  annotSave(true);
+  toast('已清空手写');
+}
+/* 锁联动：把同一把锁写到所有词的批注记录里 */
+function commitAnnotLocks(){
+  Object.keys(state.annotations || {}).forEach(k => {
+    const r = state.annotations[k];
+    if(!r) return;
+    r.lock = !!annotLockType;
+    r.lockDraw = !!annotLockDraw;
+  });
+  save();
 }
 /* 笔迹撤销 / 重做：每次改动前留一份快照 */
 let annotHist = [[]], annotHistIdx = 0, annotLastSurface = 'type';
@@ -11970,40 +12425,139 @@ function annotUpdateUndoBtns(){
 }
 function annotUndoAct(redo){
   if(annotLastSurface === 'draw'){
+    if(annotLockDraw){ toast('手写已锁，先解锁再撤销'); return; }
     const ok = redo ? annotStrokeRedo() : annotStrokeUndo();
     if(!ok) toast(redo ? '没有可重做的手写' : '没有可撤销的手写');
     return;
   }
-  if(annotLock){ toast('打字窗口已锁，先解锁再撤销'); return; }
+  if(annotLockType){ toast('打字窗已锁，先解锁再撤销'); return; }
   if(annotTab !== 'type'){ annotTab = 'type'; annotSyncUI(); }
   try{ annotTextEl.focus(); document.execCommand(redo ? 'redo' : 'undo'); annotSave(true); }catch(e){}
 }
+
+/* —— 手写笔自动感应：一旦出现笔（pen），自动打开手写笔保护 —— */
+function annotPenSeen(e){
+  if(!e || e.pointerType !== 'pen') return false;
+  if(!annotPenOnly){
+    annotPenOnly = true;
+    annotPenOnlyTiped = false;
+    annotPrefSet('penOnly', true);
+    annotSyncUI();
+    if(!annotPenAutoTiped){ annotPenAutoTiped = true; toast('检测到手写笔：已自动打开手写笔保护'); }
+  }
+  return true;
+}
+
+/* —— 激光笔：滑动留下的光，1.8 秒内渐隐 —— */
+function laserSurfaceOf(el){
+  return (el === annotFloatCanvas || el === annotFloatEl) ? annotFloatEl : annotPanel;
+}
+function laserCanvasFor(surface){
+  return surface === annotFloatEl ? afLaserEl : annotLaserEl;
+}
+function laserEligible(e, el){
+  if(!e) return false;
+  if(laserOn) return true;
+  if(e.pointerType !== 'pen' || !annotPenOnly) return false;
+  const drawSurface = (el === annotFloatCanvas);
+  return drawSurface ? annotLockDraw : annotLockType;
+}
+function laserClearAll(){
+  laserTrail = [];
+  [annotLaserEl, afLaserEl].forEach(c => {
+    const ctx = c === afLaserEl ? afLaserCtx : annotLaserCtx;
+    if(ctx) ctx.clearRect(0, 0, c.width, c.height);
+  });
+}
+function laserPaint(c, ctx, trail, now){
+  if(!ctx || !c) return;
+  ctx.clearRect(0, 0, c.width, c.height);
+  const W = c.width, H = c.height;
+  const ratio = W / (c.clientWidth || W || 1);
+  trail.forEach(q => {
+    const age = now - q.t;
+    if(age > 1800) return;
+    const a = Math.max(0, 1 - age / 1800);
+    ctx.globalAlpha = a;
+    ctx.strokeStyle = laserColor;
+    ctx.lineWidth = Math.max(1, laserW * ratio) * (0.7 + a * 0.6);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.shadowColor = laserColor;
+    ctx.shadowBlur = Math.max(4, laserW * ratio * 1.6) * a;
+    ctx.beginPath();
+    ctx.moveTo(q.x * W, q.y * H);
+    if(q.nx != null) ctx.lineTo(q.nx * W, q.ny * H);
+    else ctx.lineTo(q.x * W + 0.01, q.y * H + 0.01);
+    ctx.stroke();
+  });
+  ctx.globalAlpha = 1;
+  ctx.shadowBlur = 0;
+}
+function laserLoop(){
+  const now = performance.now();
+  laserTrail = laserTrail.filter(q => now - q.t < 1800);
+  laserPaint(annotLaserEl, annotLaserCtx, laserTrail.filter(q => q.s !== 'float'), now);
+  laserPaint(afLaserEl, afLaserCtx, laserTrail.filter(q => q.s === 'float'), now);
+  const alive = laserTrail.length > 0;
+  laserRAF = alive ? requestAnimationFrame(laserLoop) : 0;
+  if(!alive) laserClearAll();
+}
+function laserStart(){
+  if(!laserRAF) laserRAF = requestAnimationFrame(laserLoop);
+}
+function annotLaserDraw(el, e, s){
+  const p = annotPtOn(el, e);
+  const t = performance.now();
+  const prev = laserTrail[laserTrail.length - 1];
+  laserTrail.push({ x: p.x, y: p.y, t: t, s: s, nx: (prev && prev.s === s) ? prev.x : null, ny: (prev && prev.s === s) ? prev.y : null });
+  if(laserTrail.length > 600) laserTrail.splice(0, laserTrail.length - 600);
+  laserStart();
+}
+
 function annotBindDraw(el, gate){
   el.addEventListener('pointerdown', (e) => {
     if(gate && !gate()) return;
-    e.preventDefault();
-    // 电容笔模式（只作用于手写浮窗）：手指触摸不落笔，只有笔（pen）或鼠标能写
-    if(el === annotFloatCanvas && annotPenOnly && (e.pointerType === 'touch')){
-      if(!annotPenOnlyTiped){ annotPenOnlyTiped = true; toast('电容笔模式：手指不写，用触控笔（或鼠标）'); }
+    annotPenSeen(e);
+    // 手写笔保护：手指不落笔，只有笔（pen）或鼠标能写
+    if(annotPenOnly && e.pointerType === 'touch'){
+      if(!annotPenOnlyTiped){ annotPenOnlyTiped = true; toast('手写笔保护：手指不写，用触控笔（或鼠标）'); }
       return;
     }
+    e.preventDefault();
     const p = annotPtOn(el, e);
+    // 手写笔 + 锁 → 当激光笔用，不落墨
+    if(laserEligible(e, el)){
+      const surf = (el === annotFloatCanvas) ? 'float' : 'main';
+      try{ el.setPointerCapture(e.pointerId); }catch(err){}
+      annotLaserState = { el: el, surf: surf };
+      annotLaserDraw(el, e, surf);
+      return;
+    }
+    if(annotLockDraw){ toast('手写已锁，先解锁再写'); return; }
     if(annotErase){ annotEraseAt(p, el); return; }
     annotLastSurface = 'draw';
     try{ el.setPointerCapture(e.pointerId); }catch(err){}
-    annotCur = { c: (el === annotFloatCanvas ? annotInkColor : annotColor), w: annotPenWidth(e, el), pts: [p], _el: el };
+    annotCur = { c: (el === annotFloatCanvas ? annotInkColor : annotInkColor), w: annotPenWidth(e, el), pts: [p], _el: el };
     annotDrawAll();
   });
   el.addEventListener('pointermove', (e) => {
+    if(annotLaserState && annotLaserState.el === el){
+      e.preventDefault();
+      annotLaserDraw(el, e, annotLaserState.surf);
+      return;
+    }
     if(!annotCur) return;
     e.preventDefault();
     const p = annotPtOn(el, e);
+    if(annotErase){ annotEraseAt(p, el); return; }
     const last = annotCur.pts[annotCur.pts.length-1];
     if(Math.abs(p.x - last.x) + Math.abs(p.y - last.y) < 0.002) return;
     annotCur.pts.push(p);
     annotDrawAll();
   });
   function end(e){
+    if(annotLaserState && annotLaserState.el === el){ annotLaserState = null; return; }
     if(!annotCur) return;
     const el0 = annotCur._el || el;
     if(e && typeof e.clientX === 'number'){
@@ -12024,8 +12578,29 @@ function annotBindDraw(el, gate){
   el.addEventListener('pointercancel', end);
   el.addEventListener('pointerleave', end);
 }
+let annotLaserState = null;
+
+/* 打字窗表面：锁着的时候，笔在上面滑动也算激光 */
+function annotBindLaserSurface(el){
+  if(!el) return;
+  el.addEventListener('pointerdown', (e) => {
+    if(!laserEligible(e, el)) return;
+    e.preventDefault();
+    try{ el.setPointerCapture(e.pointerId); }catch(err){}
+    annotLaserState = { el: el, surf: 'main' };
+    annotLaserDraw(el, e, 'main');
+  });
+  el.addEventListener('pointermove', (e) => {
+    if(!annotLaserState || annotLaserState.el !== el) return;
+    e.preventDefault();
+    annotLaserDraw(el, e, 'main');
+  });
+  ['pointerup','pointercancel','pointerleave'].forEach(ev =>
+    el.addEventListener(ev, () => { if(annotLaserState && annotLaserState.el === el) annotLaserState = null; }));
+}
 annotBindDraw(annotCanvasEl, () => annotTab === 'draw');
 if(annotFloatCanvas) annotBindDraw(annotFloatCanvas, () => annotFloatOpen());
+annotBindLaserSurface(annotTextEl);
 
 /* —— 手写浮窗：长按「手写」拖出来 —— */
 function annotFloatPlace(){
