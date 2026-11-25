@@ -9269,13 +9269,24 @@ function takeShare(m, btn){
   if(!sh || !Array.isArray(sh.items) || !currentUser) return;
   if(sh.kind === 'set'){
     const id = newSetId();
-    state.customSets.push({
+    // 分享里若带了分类，按原样收下：分类本身 + 每个词条所属的分类
+    const inCats = Array.isArray(sh.cats) ? sh.cats.filter(c => c && c.id && c.name) : [];
+    const catIds = new Set(inCats.map(c => c.id));
+    const newSet = {
       id: id,
       name: sh.name + '（来自 ' + m.from + '）',
       desc: sh.desc || '好友分享',
-      items: sh.items.map(it => Object.assign({}, it)),
+      items: sh.items.map(it => {
+        const cp = Object.assign({}, it);
+        if(!cp.cat || !catIds.has(cp.cat)) delete cp.cat;
+        return cp;
+      }),
       builtin: false
-    });
+    };
+    if(inCats.length){
+      newSet.cats = inCats.map(c => ({ id: c.id, name: c.name, parent: (c.parent && catIds.has(c.parent)) ? c.parent : '' }));
+    }
+    state.customSets.push(newSet);
     state.enabled[id] = true;
     // 批注一起收下：只补对方有、自己还没有的词，不覆盖自己的笔记
     if(sh.annots && typeof sh.annots === 'object'){
@@ -9338,7 +9349,9 @@ function openSharePick(kind){
       row.innerHTML = '<span class="ck"></span><span class="nm">' + escapeHtml(s.name) + '</span>' +
         '<span class="ct">' + s.items.length + ' 条</span>';
       row.addEventListener('click', () => {
-        const sh = { kind:'set', name:s.name, desc:s.desc || '', items:s.items.map(it => Object.assign({}, it)) };
+        const cats = catsOf(s).map(c => ({ id: c.id, name: c.name, parent: c.parent || '' }));
+        const sh = { kind:'set', name:s.name, desc:s.desc || '', items:s.items.map(it => Object.assign({}, it)),
+                     cats: cats };
         if(withAnnot()){
           const annots = {};
           let n = 0;
@@ -9349,6 +9362,7 @@ function openSharePick(kind){
           if(n){ sh.annots = annots; toast('随分享带上 ' + n + ' 条批注'); }
           else toast('这个知识库里还没有批注');
         }
+        if(cats.length) toast('随分享带上 ' + cats.length + ' 个分类');
         sendShare(sh);
         closeSharePick();
       });
