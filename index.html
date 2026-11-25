@@ -11301,19 +11301,56 @@ function startStudy(mode){
   $('#modeLabel').textContent = modeText + ' · ' + pool.length + ' 条';
 
   showView($('#viewStudy'));
-  buildDeck();
   markNet();
-  requestAnimationFrame(() => renderPage());
+  // 等这一帧布局完成再按真实宽高切页，手机/平板竖横屏都不会把词挤掉
+  requestAnimationFrame(() => { buildDeck(); renderPage(); });
 }
 
-/* 基础分页：保证每一页本身没有重复词，且一轮下来每个词至少出现一次 */
+/* 基础分页：按当前屏幕真实容量切页，一页放不下的词自动落到下一页（不再被静默丢弃） */
+function measureFit(list){
+  if(!list.length) return true;
+  if(!field.clientWidth || !field.clientHeight) return true;
+  return orderlyOn() ? !!layoutGrouped(list, true) : !!layout(list, true);
+}
 function buildDeck(){
-  const size = pageSize();
+  const cap = pageSize();
   deck = [];
-  for(let i=0;i<pool.length;i+=size){
-    deck.push(pool.slice(i, i+size));
-  }
   pageCache.clear();
+  if(orderlyOn()){
+    // 条理：先按分类分块，切页时尽量不把一个分类劈到两页
+    const groups = [];
+    let cur = null;
+    pool.forEach(it => {
+      const k = (it._setId || '') + '|' + (it._cat || '');
+      if(!cur || cur.k !== k){ cur = { k: k, list: [] }; groups.push(cur); }
+      cur.list.push(it);
+    });
+    let acc = [];
+    const flush = () => { if(acc.length){ deck.push(acc); acc = []; } };
+    groups.forEach(g => {
+      if(measureFit(acc.concat(g.list))){ acc = acc.concat(g.list); return; }
+      flush();
+      if(measureFit(g.list)){ acc = g.list.slice(); return; }
+      // 单个分类本身就超一页：只能按容量拆开
+      let i = 0;
+      while(i < g.list.length){
+        let n = Math.min(cap, g.list.length - i);
+        while(n > 1 && !measureFit(g.list.slice(i, i + n))) n--;
+        deck.push(g.list.slice(i, i + n));
+        i += n;
+      }
+    });
+    flush();
+  }else{
+    let i = 0;
+    while(i < pool.length){
+      let n = Math.min(cap, pool.length - i);
+      while(n > 1 && !measureFit(pool.slice(i, i + n))) n--;
+      deck.push(pool.slice(i, i + n));
+      i += n;
+    }
+  }
+  if(!deck.length) deck.push([]);
   if(pageIndex >= deck.length) pageIndex = Math.max(0, deck.length - 1);
 }
 
@@ -11446,7 +11483,7 @@ function orderlyOrder(items){
 }
 
 /* 每条分类块：分类名贴在首行左侧，块内从左到右排 */
-function layoutGrouped(items){
+function layoutGrouped(items, probe){
   const W = field.clientWidth, H = field.clientHeight;
   if(!W || !H) return { rows: [], labels: [] };
   const small = W < 640;
@@ -11464,8 +11501,12 @@ function layoutGrouped(items){
   const lmax = small ? 74 : 122;
 
   let list = items.map(it => {
-    const fs = fontSizeFor(it);
-    const size = measureItem(it, wrapW, fs, shownTextOf(it));
+    let fs = fontSizeFor(it);
+    let size = measureItem(it, wrapW, fs, shownTextOf(it));
+    while(size.w > availW && fs > 10){
+      fs = Math.max(10, Math.floor(fs * availW / size.w) - 1);
+      size = measureItem(it, wrapW, fs, shownTextOf(it));
+    }
     return { it, fs, w: size.w, h: size.h,
       _gk: (it._setId || '') + '|' + (it._cat || ''),
       _lb: it._label || '' };
@@ -11540,16 +11581,18 @@ function layoutGrouped(items){
 
   let built = build(list);
   while(built.totalH > availH && list.length > 1){
+    if(probe) return null;
     list.pop();
     built = build(list);
   }
+  if(probe) return true;
   built.rows.forEach(r => r.items.forEach(m => { m.y += padTop; }));
   built.labels.forEach(l => { l.y += padTop; });
   return { rows: built.rows, labels: built.labels };
 }
 
 /* 每次渲染都重新打乱顺序、字号和位置；放不下时优先舍弃加权重复项 */
-function layout(items){
+function layout(items, probe){
   const W = field.clientWidth;
   const H = field.clientHeight;
   if(!W || !H) return [];
@@ -11565,9 +11608,13 @@ function layout(items){
   const wrapW = Math.min(small ? availW : 560, availW);
   const maxPerRow = small ? 3 : 6;
 
-  let list = (stagOn() ? shuffle(items) : items).map(it => {
-    const fs = fontSizeFor(it);
-    const size = measureItem(it, wrapW, fs, shownTextOf(it));
+  let list = (stagOn() && !probe ? shuffle(items) : items).map(it => {
+    let fs = fontSizeFor(it);
+    let size = measureItem(it, wrapW, fs, shownTextOf(it));
+    while(size.w > availW && fs > 10){
+      fs = Math.max(10, Math.floor(fs * availW / size.w) - 1);
+      size = measureItem(it, wrapW, fs, shownTextOf(it));
+    }
     return { it, fs, w:size.w, h:size.h, extra: !!it._extra };
   });
 
@@ -11597,6 +11644,7 @@ function layout(items){
 
     totalH = rows.reduce((s,r) => s + r.h, 0) + rowGap * Math.max(0, rows.length - 1);
     if(totalH <= availH) break;
+    if(probe) return null;
 
     const extraIdx = [];
     list.forEach((m,i) => { if(m.extra) extraIdx.push(i); });
@@ -11631,7 +11679,7 @@ function layout(items){
     y += row.h + gapY;
   });
 
-  return rows;
+  return probe ? true : rows;
 }
 
 function renderPage(){
@@ -12473,24 +12521,51 @@ function laserClearAll(){
 function laserPaint(c, ctx, trail, now){
   if(!ctx || !c) return;
   ctx.clearRect(0, 0, c.width, c.height);
+  if(!trail.length) return;
   const W = c.width, H = c.height;
   const ratio = W / (c.clientWidth || W || 1);
-  trail.forEach(q => {
+  const LIFE = 1800, NB = 6;
+  // 按年龄分 6 段，每段一条连续曲线；比逐点描边顺滑，也不会每点都开阴影拖慢手机
+  const bands = [];
+  let cur = null;
+  for(let i=0;i<trail.length;i++){
+    const q = trail[i];
     const age = now - q.t;
-    if(age > 1800) return;
-    const a = Math.max(0, 1 - age / 1800);
-    ctx.globalAlpha = a;
-    ctx.strokeStyle = laserColor;
-    ctx.lineWidth = Math.max(1, laserW * ratio) * (0.7 + a * 0.6);
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.shadowColor = laserColor;
-    ctx.shadowBlur = Math.max(4, laserW * ratio * 1.6) * a;
-    ctx.beginPath();
-    ctx.moveTo(q.x * W, q.y * H);
-    if(q.nx != null) ctx.lineTo(q.nx * W, q.ny * H);
-    else ctx.lineTo(q.x * W + 0.01, q.y * H + 0.01);
-    ctx.stroke();
+    if(age >= LIFE) continue;
+    const bi = Math.min(NB - 1, Math.max(0, Math.floor(age / LIFE * NB)));
+    if(!cur || cur.bi !== bi){ cur = { bi: bi, pts: [] }; bands.push(cur); }
+    cur.pts.push(q);
+  }
+  let linkPrev = null;
+  bands.forEach((bd, bi2) => {
+    const a = Math.max(0.10, 1 - (bd.bi + 0.5) / NB);
+    const pts = bd.pts.slice();
+    if(linkPrev && pts.length){ pts.unshift(linkPrev); }
+    const head = !!linkPrev;
+    if(pts.length){
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = laserColor;
+      ctx.lineWidth = Math.max(1, laserW * ratio) * (0.7 + a * 0.7);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.shadowColor = laserColor;
+      ctx.shadowBlur = Math.max(3, laserW * ratio * (bd.bi === 0 ? 2.4 : 1.2)) * a;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x * W, pts[0].y * H);
+      if(pts.length === 1){
+        ctx.lineTo(pts[0].x * W + 0.01, pts[0].y * H + 0.01);
+      }else{
+        for(let i=1;i<pts.length;i++){
+          const p0 = pts[i-1], p1 = pts[i];
+          const mx = ((p0.x + p1.x) / 2) * W, my = ((p0.y + p1.y) / 2) * H;
+          ctx.quadraticCurveTo(p0.x * W, p0.y * H, mx, my);
+        }
+        const last = pts[pts.length-1];
+        ctx.lineTo(last.x * W, last.y * H);
+      }
+      ctx.stroke();
+      linkPrev = bd.pts[bd.pts.length-1];
+    }
   });
   ctx.globalAlpha = 1;
   ctx.shadowBlur = 0;
@@ -12508,11 +12583,35 @@ function laserStart(){
   if(!laserRAF) laserRAF = requestAnimationFrame(laserLoop);
 }
 function annotLaserDraw(el, e, s){
-  const p = annotPtOn(el, e);
-  const t = performance.now();
-  const prev = laserTrail[laserTrail.length - 1];
-  laserTrail.push({ x: p.x, y: p.y, t: t, s: s, nx: (prev && prev.s === s) ? prev.x : null, ny: (prev && prev.s === s) ? prev.y : null });
-  if(laserTrail.length > 600) laserTrail.splice(0, laserTrail.length - 600);
+  if(!e) return;
+  // 手写笔高频采样：合并事件 + 补点，路线和电容笔笔迹一样连续
+  let evs = [e];
+  try{
+    const cd = (typeof e.getCoalescedEvents === 'function') ? e.getCoalescedEvents() : null;
+    if(cd && cd.length) evs = Array.prototype.slice.call(cd);
+  }catch(err){}
+  const now = performance.now();
+  let prev = null;
+  for(let i=laserTrail.length-1;i>=0;i--){
+    if(laserTrail[i].s === s){ prev = laserTrail[i]; break; }
+  }
+  evs.forEach((ev, idx) => {
+    const p = annotPtOn(el, ev);
+    const t = now - (evs.length - 1 - idx) * 3;
+    let last = prev;
+    if(last){
+      const dx = p.x - last.x, dy = p.y - last.y;
+      const dist = Math.hypot(dx, dy);
+      const steps = Math.min(32, Math.floor(dist / 0.005));
+      for(let k=1;k<=steps;k++){
+        const f = k / (steps + 1);
+        laserTrail.push({ x: last.x + dx * f, y: last.y + dy * f, t: last.t + (t - last.t) * f, s: s });
+      }
+    }
+    laserTrail.push({ x: p.x, y: p.y, t: t, s: s });
+    prev = laserTrail[laserTrail.length - 1];
+  });
+  if(laserTrail.length > 900) laserTrail.splice(0, laserTrail.length - 900);
   laserStart();
 }
 
@@ -12584,10 +12683,16 @@ let annotLaserState = null;
 /* 打字窗表面：锁着的时候，笔在上面滑动也算激光 */
 function annotBindLaserSurface(el){
   if(!el) return;
+  let prevTA = '';
+  const stop = () => {
+    if(annotLaserState && annotLaserState.el === el) annotLaserState = null;
+    if(prevTA !== ''){ el.style.touchAction = prevTA; prevTA = ''; }
+  };
   el.addEventListener('pointerdown', (e) => {
     if(!laserEligible(e, el)) return;
     e.preventDefault();
     try{ el.setPointerCapture(e.pointerId); }catch(err){}
+    if(prevTA === ''){ prevTA = el.style.touchAction || ''; el.style.touchAction = 'none'; }
     annotLaserState = { el: el, surf: 'main' };
     annotLaserDraw(el, e, 'main');
   });
@@ -12596,8 +12701,7 @@ function annotBindLaserSurface(el){
     e.preventDefault();
     annotLaserDraw(el, e, 'main');
   });
-  ['pointerup','pointercancel','pointerleave'].forEach(ev =>
-    el.addEventListener(ev, () => { if(annotLaserState && annotLaserState.el === el) annotLaserState = null; }));
+  ['pointerup','pointercancel','pointerleave'].forEach(ev => el.addEventListener(ev, stop));
 }
 annotBindDraw(annotCanvasEl, () => annotTab === 'draw');
 if(annotFloatCanvas) annotBindDraw(annotFloatCanvas, () => annotFloatOpen());
