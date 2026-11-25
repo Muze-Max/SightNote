@@ -2040,7 +2040,10 @@
       <p class="format-tip" id="cloudTip">把此刻界面上的一切（知识库、批注、生熟词、记录）作为云端最新一版存上去。</p>
       <div class="cloud-line" id="cloudStatus">正在读取…</div>
       <button class="primary" id="cloudSaveNow" style="width:100%;margin:10px 0 4px;">保存当前状态到云端</button>
-      <div class="tt-label" style="margin-top:14px;">云端版本 · 仅保留近一天</div>
+      <div class="tt-label" style="margin-top:14px;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <span>云端版本 · 仅保留近一天</span>
+        <button class="btn-line hidden" id="cloudVerToggle" style="padding:2px 9px;font-size:10.5px;flex:0 0 auto;">展开</button>
+      </div>
       <div class="transit-sets" id="cloudVersions"><div class="transit-empty">还在读取…</div></div>
     </div>
   </div>
@@ -4067,9 +4070,9 @@ async function cloudPush(name, data){
     if(oldFull && oldFull.data && !isThinSnapshot(oldFull.data)){
       // 云端已有内容时，不允许用空数据覆盖
       if(isThinSnapshot(incoming)) return false;
-      // 内容比云端少了不少、或距上次备份超过 90 秒，就留一个回退点（本机 + 云端环形历史）
+      // 内容比云端少了不少、或距上次留点超过 2 小时，就留一个回退点（本机 + 云端环形历史）
       const shrank = contentCount(incoming).items < contentCount(oldFull.data).items;
-      if(shrank || Date.now() - lastHistAt > 90000){
+      if(shrank || Date.now() - lastHistAt > HIST_AUTO_MS){
         try{ localStorage.setItem(BAK_KEY + key, JSON.stringify({ at: oldFull.at || Date.now(), payload: oldPayload })); }catch(e){}
         saveHistory(key, oldFull.at || Date.now(), oldPayload);
       }
@@ -4290,7 +4293,7 @@ function parseCloudEnvelope(payload){
   try{
     const obj = JSON.parse(payload.slice(CLOUD_PLAIN.length));
     if(!obj || typeof obj !== 'object' || !obj.data) return null;
-    return { at: Number(obj.at) || 0, data: obj.data };
+    return { at: Number(obj.at) || 0, data: obj.data, star: !!obj.star, by: obj.by || '' };
   }catch(e){ return null; }
 }
 
@@ -4299,16 +4302,34 @@ function parseCloudEnvelope(payload){
    结果一个号能攒十几行、每行都是一整份几百 KB——库容和带宽都被它吃掉。
    现在固定用 #H1 / #H2 两个槽位轮流写：云端最多 2 份，不用删除，占用是常数。 */
 const HIST_MARK = '#H';
-const HIST_MAX = 4;
+const HIST_MAX = 12;
 const HIST_KEEP_MS = 24 * 60 * 60 * 1000;   // 回退列表只展示最近一天的版本
+const HIST_AUTO_MS = 120 * 60 * 1000;       // 自动版本之间至少隔 2 小时：12 格刚好铺满一天
 const HIST_IDX_KEY = 'sww-hist-idx@';
+const HIST_STAR_KEY = 'sww-hist-star@';
 function histBase(name){ return normName(name) || name; }
 function histKey(name, i){ return histBase(name) + HIST_MARK + (i + 1); }
+function histStarSet(base){
+  try{ const a = JSON.parse(localStorage.getItem(HIST_STAR_KEY + base) || '[]'); return Array.isArray(a) ? a : []; }catch(e){ return []; }
+}
+function histStarMark(base, key){
+  try{
+    const a = histStarSet(base);
+    if(a.indexOf(key) < 0) a.push(key);
+    localStorage.setItem(HIST_STAR_KEY + base, JSON.stringify(a.slice(-HIST_MAX)));
+  }catch(e){}
+}
 function nextHistSlot(name){
   const base = histBase(name);
   let i = 0;
   try{ i = Number(JSON.parse(localStorage.getItem(HIST_IDX_KEY + base) || '0')) || 0; }catch(e){ i = 0; }
-  const idx = (i + 1) % HIST_MAX;
+  const stars = histStarSet(base);
+  let idx = (i + 1) % HIST_MAX;
+  // 手动保存过的 ※ 版本要保住，环形指针跳过它
+  for(let k = 0; k < HIST_MAX; k++){
+    if(stars.indexOf(histKey(base, idx)) < 0) break;
+    idx = (idx + 1) % HIST_MAX;
+  }
   try{ localStorage.setItem(HIST_IDX_KEY + base, String(idx)); }catch(e){}
   return histKey(base, idx);
 }
@@ -4325,19 +4346,33 @@ async function cloudHistory(name, limit){
     for(const r of rows){
       const p = await decodePayload(r.payload);
       const full = parseCloudEnvelope(p);
-      if(full) out.push({ key: r.username, at: full.at, payload: p, data: full.data });
+      if(full){
+        if(full.star) histStarMark(base, r.username);   // 换设备后也能认出 ※ 格子，别覆盖掉
+        out.push({ key: r.username, at: full.at, payload: p, data: full.data, star: !!full.star });
+      }
     }
     out.sort((a, b) => b.at - a.at);
     return out;
   }catch(e){ return []; }
 }
 
-async function saveHistory(name, at, payload){
+async function saveHistory(name, at, payload, opts){
   const base = histBase(name);
   if(!payload) return;
+  const o = opts || {};
   try{
+    let text = payload;
+    if(o.star){
+      // 手动保存的版本打上 ※，并记成「不能覆盖」的格子
+      try{
+        const j = JSON.parse(text.slice(CLOUD_PLAIN.length));
+        j.star = 1; j.by = 'user';
+        text = CLOUD_PLAIN + JSON.stringify(j);
+      }catch(e){}
+    }
     const slot = nextHistSlot(base);
-    const body = await encodePayloadText(payload);
+    if(o.star) histStarMark(base, slot);
+    const body = await encodePayloadText(text);
     await cloudReq('POST', '/rest/v1/shiwang_profiles',
       JSON.stringify([{ username: slot, payload: body, updated_at: new Date().toISOString() }]),
       { Prefer: 'resolution=merge-duplicates,return=minimal' }, 2);
@@ -4847,7 +4882,7 @@ async function bgSyncOnce(){
 
 /* ---------- 星云：设备登记 / 星座 / 30 分钟自动同步 ---------- */
 const DEV_KEY = 'sww-device-id';
-const AUTO_MS = 30 * 60 * 1000;      // 每 30 分钟自动同步
+const AUTO_MS = 5 * 60 * 1000;       // 每 5 分钟自动同步一次云端
 const ONLINE_MS = 15 * 60 * 1000;    // 15 分钟内有动作算在线
 const SIGNS = ['白羊座','金牛座','双子座','巨蟹座','狮子座','处女座','天秤座','天蝎座','射手座','摩羯座','水瓶座','双鱼座'];
 /* 十二星座星线与星点：取自公开星座连线数据（d3-celestial / Stellarium 星线），等比归一化 */
@@ -5394,8 +5429,8 @@ async function autoSyncNow(manual){
     const at = Date.now();
     const snap = ttSnapshot();
     const payload = CLOUD_PLAIN + JSON.stringify({ v:1, name:name, at:at, data:snap });
-    // 自动同步留一个可回退的时间点
-    saveHistory(name, at, payload);
+    // 自动同步最多每 2 小时留一个可回退的时间点（手动同步另算）
+    if(manual || Date.now() - lastHistAt > HIST_AUTO_MS) saveHistory(name, at, payload);
     metaEnsure().records.unshift({
       at: at, dev: d.label, sets: snap.customSets.length,
       items: snap.customSets.reduce((s,x) => s + ((x.items && x.items.length) || 0), 0),
@@ -6376,24 +6411,46 @@ function refreshBakRow(){
   if(bak) $('#transitBakTip').textContent = '本机留有 ' + fmtTime(bak.at) + ' 的云端备份，可回退';
 }
 
+let cloudVerExpand = false;
+let cloudVerList = [];
+let cloudVerLoading = false;
+
 async function refreshVersions(){
   const box = $('#cloudVersions');
   if(!box) return;
   if(!currentUser){ box.innerHTML = '<div class="transit-empty">登录后可用</div>'; return; }
+  cloudVerLoading = true;
   box.innerHTML = '<div class="transit-empty">正在读取云端版本…</div>';
   const all = await cloudHistory(currentUser);
+  cloudVerLoading = false;
   const cutoff = Date.now() - HIST_KEEP_MS;
-  const list = all.filter(v => (v.at || 0) >= cutoff);
-  if(!list.length){ box.innerHTML = '<div class="transit-empty">近一天还没有可回退的版本，之后每次同步都会自动留存</div>'; return; }
+  cloudVerList = all.filter(v => (v.at || 0) >= cutoff);
+  renderVersions();
+}
+function renderVersions(){
+  const box = $('#cloudVersions');
+  const tg = $('#cloudVerToggle');
+  if(!box) return;
+  if(cloudVerLoading) return;
+  if(!cloudVerList.length){
+    if(tg) tg.classList.add('hidden');
+    box.innerHTML = '<div class="transit-empty">近一天还没有可回退的版本，每 5 分钟自动同步，最多每 2 小时留一个回退点</div>';
+    return;
+  }
+  const limit = cloudVerExpand ? cloudVerList.length : Math.min(4, cloudVerList.length);
+  if(tg){
+    tg.classList.toggle('hidden', cloudVerList.length <= 4);
+    tg.textContent = cloudVerExpand ? '收起' : ('展开全部 ' + cloudVerList.length);
+  }
   box.innerHTML = '';
-  list.slice(0, 8).forEach(v => {
+  cloudVerList.slice(0, limit).forEach(v => {
     const sets = (v.data.customSets || []);
     const items = sets.reduce((s,x) => s + ((x.items && x.items.length) || 0), 0);
     const row = document.createElement('div');
     row.className = 'transit-set';
     row.innerHTML = '<span class="ck" style="border-radius:4px;"></span>' +
-      '<span class="nm">' + fmtTime(v.at) + '</span>' +
-      '<span class="ct">知识库 ' + sets.length + ' 个 · ' + items + ' 条 · 熟词 ' + (v.data.known || []).length + '</span>';
+      '<span class="nm">' + (v.star ? '<b style="color:#c0392b;">※</b> ' : '') + fmtTime(v.at) + '</span>' +
+      '<span class="ct">' + (v.star ? '手动保存 · ' : '自动 · ') + '知识库 ' + sets.length + ' 个 · ' + items + ' 条 · 熟词 ' + (v.data.known || []).length + '</span>';
     const btn = document.createElement('button');
     btn.className = 'btn-line';
     btn.style.cssText = 'padding:4px 10px;font-size:10.5px;margin-left:10px;';
@@ -6406,6 +6463,10 @@ async function refreshVersions(){
     box.appendChild(row);
   });
 }
+if($('#cloudVerToggle')) $('#cloudVerToggle').addEventListener('click', () => {
+  cloudVerExpand = !cloudVerExpand;
+  renderVersions();
+});
 
 async function restoreVersion(v){
   if(!v || !v.data){ toast('这个版本读不出来'); return; }
@@ -11084,12 +11145,17 @@ if($('#cloudSaveNow')) $('#cloudSaveNow').addEventListener('click', async () => 
   if(!currentUser){ toast('先登录'); return; }
   const btn = $('#cloudSaveNow');
   btn.disabled = true; btn.textContent = '正在保存…';
-  const ok = await cloudPush(currentUser, ttSnapshot());
+  const snap = ttSnapshot();
+  const ok = await cloudPush(currentUser, snap);
   btn.disabled = false; btn.textContent = '保存当前状态到云端';
   if(ok){
-    cloudCntSet(currentUser, ttSnapshot());
-    cloudAtSet(currentUser, new Date().toISOString());
-    toast('已保存为云端最新一版');
+    cloudCntSet(currentUser, snap);
+    const at = Date.now();
+    cloudAtSet(currentUser, new Date(at).toISOString());
+    // 手动保存的版本单独留一份并打 ※，自动版本不会把它挤掉
+    try{ await saveHistory(currentUser, at, CLOUD_PLAIN + JSON.stringify({ v:1, name:currentUser, at:at, data:snap }), { star:true }); }catch(e){}
+    cloudVerExpand = true;
+    toast('已保存为云端最新一版，版本记作 ※');
   }else{
     toast('云端没写上去，检查网络后再点一次');
   }
