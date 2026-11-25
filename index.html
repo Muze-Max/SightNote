@@ -795,6 +795,8 @@
   .batch-act.danger:hover{border-color:var(--warn);color:var(--warn);}
   /* 分类 */
   .cat-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 10px;}
+  .share-opt{display:flex;align-items:center;gap:8px;font-size:12px;color:#5a6472;cursor:pointer;}
+  .share-opt input{width:15px;height:15px;accent-color:#2f7d5d;}
   .cat-tools .btn-line{padding:6px 12px;font-size:11px;}
   .cat-hint{font-size:10.5px;color:var(--faint);}
   .cat-head{
@@ -2720,10 +2722,21 @@
       <button class="close-x" id="closeSharePick" aria-label="关闭">×</button>
     </div>
     <div class="sheet-body">
-      <label id="shareAnnotRow" style="display:flex;align-items:center;gap:8px;margin:-4px 0 12px;font-size:12px;color:#5a6472;cursor:pointer;">
-        <input type="checkbox" id="shareWithAnnot" style="width:15px;height:15px;accent-color:#2f7d5d;">
-        <span>同时分享这些词的「笔」批注（打字与手写）</span>
-      </label>
+      <div id="shareOptRow" style="display:flex;flex-direction:column;gap:9px;margin:-2px 0 14px;">
+        <label class="share-opt" id="shareCatRow" style="display:none;">
+          <input type="checkbox" id="shareWithCats">
+          <span>连分类一起分享（含每个词条属于哪个分类）</span>
+        </label>
+        <label class="share-opt">
+          <input type="checkbox" id="shareWithText">
+          <span>同时分享「笔」里的文字批注</span>
+        </label>
+        <label class="share-opt">
+          <input type="checkbox" id="shareWithStrokes">
+          <span>同时分享「笔」里的手写笔迹</span>
+        </label>
+      </div>
+      <div class="transit-sets" id="sharePickList"></div>
       <div class="transit-sets" id="sharePickList"></div>
     </div>
   </div>
@@ -6187,9 +6200,30 @@ async function runTransit(){
   dstData.hiddenSets = Array.isArray(dstData.hiddenSets) ? dstData.hiddenSets : [];
 
   const moved = (srcData.customSets || []).filter(s => transitPicked.has(s.id));
+  const srcEdits = srcData.wordEdits || {};
+  const srcAnnots = srcData.annotations || {};
+  dstData.annotations = (dstData.annotations && typeof dstData.annotations === 'object') ? dstData.annotations : {};
+  const copiedAnnotKeys = [];   // 键名可能要按"烤"后的单词重算
   const copies = moved.map(s => {
     const c = JSON.parse(JSON.stringify(s));
     if(dstData.customSets.some(x => x.id === c.id)) c.id = newSetId();
+    // 词条里带上来源账号对内置词做的改动，目标账号看到的就是同一份内容
+    c.items = (c.items || []).map(it => {
+      const cp = Object.assign({}, it);
+      const k = it.__ok || keyOf(it);
+      if(srcEdits[k]) Object.assign(cp, srcEdits[k]);
+      delete cp.__ok;
+      return cp;
+    });
+    // 批注：按烤过之后的单词键收下，目标账号已有同词批注则不覆盖
+    (s.items || []).forEach((it, i) => {
+      const rec = srcAnnots[it.__ok || keyOf(it)];
+      const key = keyOf((c.items || [])[i] || it);
+      if(!rec || !key || dstData.annotations[key]) return;
+      if(!String(rec.text || '').trim() && !String(rec.html || '').trim() && !(rec.strokes && rec.strokes.length)) return;
+      dstData.annotations[key] = JSON.parse(JSON.stringify(rec));
+      copiedAnnotKeys.push(key);
+    });
     dstData.enabled[c.id] = true;
     dstData.hiddenSets = dstData.hiddenSets.filter(id => id !== c.id);
     return c;
@@ -6203,12 +6237,15 @@ async function runTransit(){
     state.customSets = dstData.customSets;
     state.enabled = dstData.enabled;
     state.hiddenSets = dstData.hiddenSets;
+    state.annotations = dstData.annotations;
     save();
     renderMenu();
   }else{
     const ok = await cloudPush(dst, dstData);
     if(!ok){ toast('目标账号写入失败，检查网络后重试'); return; }
   }
+
+  if(copiedAnnotKeys.length) toast('同时复制了 ' + copiedAnnotKeys.length + ' 条批注');
 
   toast('已把 ' + copies.length + ' 个知识库迁到「' + dst + '」');
   transitPicked.clear();
@@ -9288,22 +9325,6 @@ function takeShare(m, btn){
     }
     state.customSets.push(newSet);
     state.enabled[id] = true;
-    // 批注一起收下：只补对方有、自己还没有的词，不覆盖自己的笔记
-    if(sh.annots && typeof sh.annots === 'object'){
-      let n = 0;
-      Object.keys(sh.annots).forEach(k => {
-        const a = sh.annots[k];
-        if(!k || !a || state.annotations[k]) return;
-        state.annotations[k] = {
-          text: String(a.text || ''), html: String(a.html || ''), size: a.size || 16,
-          color: a.color || '#23231f',
-          strokes: Array.isArray(a.strokes) ? a.strokes : [],
-          updatedAt: Number(a.updatedAt) || Date.now()
-        };
-        n++;
-      });
-      if(n) toast('同时收下 ' + n + ' 条批注');
-    }
     toast('已收进知识库：' + sh.name);
   }else{
     const list = (sh.list === 'known') ? state.known : state.unknown;
@@ -9316,6 +9337,28 @@ function takeShare(m, btn){
     });
     toast('已收进「' + (sh.list === 'known' ? '熟悉' : '陌生') + '」');
   }
+  // 批注：只补自己还没有的词，不覆盖自己的笔记；对方只分享了文字或只分享了手写也行
+  if(sh.annots && typeof sh.annots === 'object'){
+    let n = 0;
+    Object.keys(sh.annots).forEach(k => {
+      const a = sh.annots[k];
+      if(!k || !a || state.annotations[k]) return;
+      const hasText = ('text' in a) || ('html' in a);
+      const hasStroke = Array.isArray(a.strokes) && a.strokes.length > 0;
+      if(!hasText && !hasStroke) return;
+      const rec = { text: '', html: '', size: 16, color: '#23231f', strokes: [], updatedAt: Number(a.updatedAt) || Date.now() };
+      if(hasText){
+        rec.text = String(a.text || '');
+        rec.html = String(a.html || '');
+        rec.size = a.size || 16;
+        rec.color = a.color || '#23231f';
+      }
+      if(hasStroke) rec.strokes = a.strokes;
+      state.annotations[k] = rec;
+      n++;
+    });
+    if(n) toast('同时收下 ' + n + ' 条批注');
+  }
   save();
   renderMenu();
   $('#unknownCount').textContent = state.unknown.length;
@@ -9324,22 +9367,49 @@ function takeShare(m, btn){
 }
 
 /* ---------- 分享 ---------- */
+// 内置库的改动存在 wordEdits 里，分享/迁移时要先把改动"烤"进词条，对方才看得到
+function bakeItems(items){
+  const edits = state.wordEdits || {};
+  return (items || []).map(it => {
+    const cp = Object.assign({}, it);
+    const k = it.__ok || keyOf(it);
+    if(edits[k]) Object.assign(cp, edits[k]);
+    delete cp.__ok;
+    return cp;
+  });
+}
+// 按选择把批注拆成"文字部分"与"手写部分"，键用烤过之后的单词，保证对方能对上
+function packAnnots(rawItems, bakedItems, wantText, wantStroke){
+  const annots = {};
+  let n = 0;
+  rawItems.forEach((it, i) => {
+    const rec = state.annotations && state.annotations[it.__ok || keyOf(it)];
+    const key = keyOf(bakedItems[i] || it);
+    if(!rec || !key) return;
+    const a = { updatedAt: rec.updatedAt || 0 };
+    if(wantText){ a.text = rec.text || ''; a.html = rec.html || ''; a.size = rec.size || 16; a.color = rec.color || '#23231f'; }
+    if(wantStroke){ a.strokes = Array.isArray(rec.strokes) ? rec.strokes : []; }
+    annots[key] = a;
+    n++;
+  });
+  return n ? { annots: annots, count: n } : null;
+}
 function openSharePick(kind){
   if(!chatFriend && !chatGroupId && !chatAdminPeer) return;
   shareKind = kind;
   $('#sharePickTitle').textContent = kind === 'set' ? '选择要分享的知识库' : '选择要分享的记忆库';
-  // 批注只跟着知识库走：记忆库里的词本来就有各自的批注在本人账号里
-  const row = $('#shareAnnotRow');
-  if(row) row.style.display = kind === 'set' ? '' : 'none';
-  if(kind === 'set'){ const cb = $('#shareWithAnnot'); if(cb) cb.checked = false; }
+  // 分类只属于知识库；文字/手写批注两边都能带
+  const catRow = $('#shareCatRow');
+  if(catRow) catRow.style.display = kind === 'set' ? '' : 'none';
+  ['#shareWithCats', '#shareWithText', '#shareWithStrokes'].forEach(sel => {
+    const cb = $(sel);
+    if(cb) cb.checked = false;
+  });
+  const wantText = () => !!(kind && $('#shareWithText') && $('#shareWithText').checked);
+  const wantStroke = () => !!(kind && $('#shareWithStrokes') && $('#shareWithStrokes').checked);
+  const wantCats = () => !!(kind === 'set' && $('#shareWithCats') && $('#shareWithCats').checked);
   const box = $('#sharePickList');
   box.innerHTML = '';
-  const ann = (it) => {
-    const rec = state.annotations && state.annotations[keyOf(it)];
-    return rec ? { text: rec.text || '', html: rec.html || '', size: rec.size || 16, color: rec.color || '#23231f',
-                   strokes: Array.isArray(rec.strokes) ? rec.strokes : [], updatedAt: rec.updatedAt || 0 } : null;
-  };
-  const withAnnot = () => !!(kind === 'set' && $('#shareWithAnnot') && $('#shareWithAnnot').checked);
   if(kind === 'set'){
     const sets = allSets();
     if(!sets.length){ box.innerHTML = '<div class="transit-empty">还没有知识库</div>'; }
@@ -9349,20 +9419,17 @@ function openSharePick(kind){
       row.innerHTML = '<span class="ck"></span><span class="nm">' + escapeHtml(s.name) + '</span>' +
         '<span class="ct">' + s.items.length + ' 条</span>';
       row.addEventListener('click', () => {
-        const cats = catsOf(s).map(c => ({ id: c.id, name: c.name, parent: c.parent || '' }));
-        const sh = { kind:'set', name:s.name, desc:s.desc || '', items:s.items.map(it => Object.assign({}, it)),
-                     cats: cats };
-        if(withAnnot()){
-          const annots = {};
-          let n = 0;
-          s.items.forEach(it => {
-            const a = ann(it);
-            if(a){ annots[keyOf(it)] = a; n++; }
-          });
-          if(n){ sh.annots = annots; toast('随分享带上 ' + n + ' 条批注'); }
-          else toast('这个知识库里还没有批注');
+        const raw = s.items || [];
+        const baked = bakeItems(raw);
+        const sh = { kind:'set', name:s.name, desc:s.desc || '', items:baked };
+        if(wantCats()){
+          const cats = catsOf(s).map(c => ({ id: c.id, name: c.name, parent: c.parent || '' }));
+          if(cats.length){ sh.cats = cats; toast('随分享带上 ' + cats.length + ' 个分类'); }
+          else toast('这个知识库还没有分类');
         }
-        if(cats.length) toast('随分享带上 ' + cats.length + ' 个分类');
+        const pk = packAnnots(raw, baked, wantText(), wantStroke());
+        if(pk){ sh.annots = pk.annots; toast('随分享带上 ' + pk.count + ' 条批注'); }
+        else if(wantText() || wantStroke()) toast('这个知识库里还没有批注');
         sendShare(sh);
         closeSharePick();
       });
@@ -9377,7 +9444,13 @@ function openSharePick(kind){
       row.addEventListener('click', () => {
         const list = key === 'known' ? state.known : state.unknown;
         if(!list.length){ toast(label + '还是空的'); return; }
-        sendShare({ kind:'words', list:key, name:label, items:list.map(it => Object.assign({}, it)) });
+        const raw = list.map(it => Object.assign({}, it));
+        const baked = bakeItems(raw);
+        const sh = { kind:'words', list:key, name:label, items:baked };
+        const pk = packAnnots(raw, baked, wantText(), wantStroke());
+        if(pk){ sh.annots = pk.annots; toast('随分享带上 ' + pk.count + ' 条批注'); }
+        else if(wantText() || wantStroke()) toast('这些词还没有批注');
+        sendShare(sh);
         closeSharePick();
       });
       box.appendChild(row);
