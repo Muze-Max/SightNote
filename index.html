@@ -450,6 +450,13 @@
     transition:color .18s ease;
   }
   .back:hover{color:var(--ink);}
+  .study-left{display:flex;align-items:center;gap:10px;}
+  /* 眼睛：睁开=看单词，闭上=看中文（词与释义位置互换） */
+  .eye-btn{margin-left:2px;position:relative;}
+  .eye-btn .eye-shut{display:none;}
+  .eye-btn.shut{color:var(--accent);border-color:var(--accent);}
+  .eye-btn.shut .eye-open{display:none;}
+  .eye-btn.shut .eye-shut{display:block;}
   .mode-label{font-size:11px;letter-spacing:.16em;color:var(--faint);}
   .study-top .net-btn{
     border:1px solid var(--line);
@@ -1779,7 +1786,21 @@
 <!-- ============== 记忆 ============== -->
 <div class="view" id="viewStudy">
   <div class="study-top">
+    <div class="study-left">
     <button class="back" id="backMenu">← 菜单</button>
+    <button class="pen-btn eye-btn" id="eyeBtn" title="眼睛睁开：显示单词，点开看中文释义；眼睛闭上：中文显示在词的位置，点开看英文" aria-label="显示/遮住单词" aria-pressed="false">
+      <svg class="eye-open" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M1.9 12S5.4 5.6 12 5.6 22.1 12 22.1 12 18.6 18.4 12 18.4 1.9 12 1.9 12z"/>
+        <circle cx="12" cy="12" r="3.4"/>
+      </svg>
+      <svg class="eye-shut" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2.4 12s3.4-5.6 9.6-5.6c5 0 8.2 3.5 9.1 4.8"/>
+        <path d="M2.8 8.4c.6 1.2 1.5 2.4 2.6 3.4"/>
+        <path d="M21.6 12c-.7 1.9-2.2 3.6-4.2 4.6"/>
+        <path d="M2 2l20 20" stroke-width="1.7"/>
+      </svg>
+    </button>
+    </div>
     <div class="study-right">
       <div class="mode-label" id="modeLabel"></div>
       <button class="pen-btn" id="penBtn" title="批注模式：点单词写批注、可手写" aria-label="批注模式" aria-pressed="false">
@@ -1985,10 +2006,10 @@
       <button class="close-x" id="closeItem" aria-label="关闭">×</button>
     </div>
     <div class="sheet-body">
-      <div class="field-line"><input id="itemEn" maxlength="180" placeholder="内容（英文单词 / 短语 / 句子）"></div>
-      <div class="field-line"><input id="itemZh" maxlength="180" placeholder="释义 / 中文"></div>
-      <div class="field-line"><input id="itemPos" maxlength="20" placeholder="词性，如 n. / v. / phr.（可空）"></div>
-      <div class="field-line"><input id="itemRoot" maxlength="80" placeholder="备注 / 词根（可空）"></div>
+      <div class="field-line"><input id="itemEn" placeholder="内容（英文单词 / 短语 / 句子）"></div>
+      <div class="field-line"><input id="itemZh" placeholder="释义 / 中文"></div>
+      <div class="field-line"><input id="itemPos" placeholder="词性，如 n. / v. / phr.（可空）"></div>
+      <div class="field-line"><input id="itemRoot" placeholder="备注 / 词根（可空）"></div>
       <button class="btn-line" id="saveItem" style="margin-top:14px;">保存</button>
     </div>
   </div>
@@ -9594,10 +9615,14 @@ $('#setList').addEventListener('click', (e) => {
   }
   const set = getSetById(id);
   if(!set) return;
-  state.enabled[id] = !isOn(id);
+  const turningOn = !isOn(id);
+  state.enabled[id] = turningOn;
+  // 高层动，低层跟着动：勾选上层把下属知识库一起勾上，取消则一起取消
+  // （低层仍可在上层关闭时单独勾选）
+  const kids = setDescendants(id);
+  kids.forEach(cid => { state.enabled[cid] = turningOn; });
   save();
-  row.classList.toggle('on', isOn(id));
-  refreshPoolInfo();
+  renderMenu();
 });
 $$('.switch').forEach(sw => {
   sw.addEventListener('click', () => {
@@ -10608,6 +10633,19 @@ function markStag(){
   box.querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('on', b.dataset.stag === (stagOn() ? '1' : '0')));
 }
 
+/* 眼睛开关：睁开看单词（点开看中文），闭上看中文（点开看单词） */
+function zhFirst(){ return !!(state.settings && state.settings.zhFirst); }
+function shownTextOf(it){
+  if(!it) return '';
+  return zhFirst() ? (it.zh || it.en || '') : (it.en || '');
+}
+function markEye(){
+  const b = $('#eyeBtn');
+  if(!b) return;
+  b.classList.toggle('shut', zhFirst());
+  b.setAttribute('aria-pressed', zhFirst() ? 'true' : 'false');
+}
+
 function fontSizeFor(it){
   if(!stagOn()){
     if(it.type === 'sentence') return 14;
@@ -10630,7 +10668,7 @@ function getMeasurer(){
   return measurer;
 }
 
-function measureItem(it, wrapW, fs){
+function measureItem(it, wrapW, fs, text){
   const m = getMeasurer();
   const span = document.createElement('span');
   span.className = 'word' + (it.type === 'sentence' ? ' sentence' : '');
@@ -10642,7 +10680,7 @@ function measureItem(it, wrapW, fs){
     span.style.whiteSpace = 'normal';
     span.style.maxWidth = wrapW + 'px';
   }
-  span.textContent = it.en;
+  span.textContent = (text == null ? it.en : text);
   m.appendChild(span);
   const w = span.offsetWidth, h = span.offsetHeight;
   span.remove();
@@ -10704,7 +10742,7 @@ function layout(items){
 
   let list = (stagOn() ? shuffle(items) : items).map(it => {
     const fs = fontSizeFor(it);
-    const size = measureItem(it, wrapW, fs);
+    const size = measureItem(it, wrapW, fs, shownTextOf(it));
     return { it, fs, w:size.w, h:size.h, extra: !!it._extra };
   });
 
@@ -10774,6 +10812,7 @@ function layout(items){
 function renderPage(){
   hideCard();
   clearActive();
+  markEye();
 
   if(!deck.length){
     field.innerHTML = '<div class="empty" style="position:absolute;left:50%;top:45%;transform:translate(-50%,-50%);">没有可练习的内容<br><span style="font-size:11px;">回菜单勾选知识库，或先导入一些内容</span></div>';
@@ -10791,13 +10830,14 @@ function renderPage(){
     row.items.forEach(m => {
       const el = document.createElement('span');
       el.className = 'word' + (m.it.type === 'sentence' ? ' sentence' : '');
-      el.textContent = m.it.en;
+      const shown = shownTextOf(m.it);
+      el.textContent = shown;
       el.style.fontSize = m.fs + 'px';
       el.style.left = m.x.toFixed(1) + 'px';
       el.style.top = m.y.toFixed(1) + 'px';
       el.style.setProperty('--d', stagOn() ? (Math.random()*0.16).toFixed(2) + 's' : '0s');
       el.dataset.key = keyOf(m.it);
-      el.dataset.say = m.it.en;
+      el.dataset.say = shown;
       el.dataset.sayAuto = '1';
       el.setAttribute('role','button');
       el.setAttribute('tabindex','0');
@@ -11109,6 +11149,16 @@ function annotClamp(){
 }
 
 /* 模式开关 */
+$('#eyeBtn').addEventListener('click', () => {
+  if(!state.settings) return;
+  state.settings.zhFirst = !zhFirst();
+  save();
+  markEye();
+  if(!$('#viewStudy').classList.contains('hidden') && deck.length) renderPage();
+  toast(zhFirst()
+    ? '眼睛闭上：中文显示在词的位置，点开看英文'
+    : '眼睛睁开：显示单词，点开看中文释义');
+});
 $('#penBtn').addEventListener('click', () => {
   annotOn = !annotOn;
   const b = $('#penBtn');
@@ -11553,9 +11603,10 @@ function showCard(el, item){
 
   cardPos.textContent = item.pos || '';
   cardPos.style.display = item.pos ? '' : 'none';
-  cardMean.textContent = item.zh || '（暂无释义）';
-  // 释义、词根也点一下就能读（中文用中文发音）
-  if(item.zh && item.zh !== '（暂无释义）') cardMean.setAttribute('data-say', item.zh);
+  // 眼睛闭上时两处互换：中文占词的位置（格子里），英文来到释义这一行
+  const meanText = zhFirst() ? (item.en || '') : (item.zh || '（暂无释义）');
+  cardMean.textContent = meanText;
+  if(meanText && meanText !== '（暂无释义）') cardMean.setAttribute('data-say', meanText);
   else cardMean.removeAttribute('data-say');
   if(item.root){
     cardRoot.textContent = item.root;
