@@ -786,6 +786,11 @@
   }
   .batch-bar.hidden{display:none;}
   .set-sticky{position:sticky;top:0;z-index:4;background:var(--paper);padding:2px 0 4px;margin-bottom:2px;}
+  #setSticky.collapsed .field-line,
+  #setSticky.collapsed .set-tools,
+  #setSticky.collapsed .cat-tools{display:none !important;}
+  #setSticky.collapsed .list-head{margin-bottom:4px;}
+  #setSticky.collapsed{cursor:pointer;}
   .drop-before{box-shadow:inset 0 3px 0 #2f7d5d;}
   .drop-after{box-shadow:inset 0 -3px 0 #2f7d5d;}
   .drop-into{background:#eef6f0;}
@@ -9967,6 +9972,10 @@ function openSetManager(id){
   if(manageSetId !== id){ setPicked.clear(); setSelOn = false; }
   manageSetId = id;
   $('#setSearch').value = '';
+  const sticky0 = $('#setSticky');
+  if(sticky0) sticky0.classList.remove('collapsed');
+  const wrap0 = document.querySelector('#viewSet .list-wrap');
+  if(wrap0) wrap0.scrollTop = 0;
   renderSetView();
   showView($('#viewSet'));
 }
@@ -13221,6 +13230,27 @@ $('#backMenu').addEventListener('click', () => {
   renderMenu();
   showView($('#viewMenu'));
 });
+
+/* 知识库管理页：列表下滑时收起工具区（只留标题行），滑回顶部或点一下标题再展开 */
+(function(){
+  const wrap = document.querySelector('#viewSet .list-wrap');
+  if(!wrap) return;
+  let lastTop = 0;
+  wrap.addEventListener('scroll', () => {
+    const sticky = $('#setSticky');
+    if(!sticky) return;
+    const st = wrap.scrollTop;
+    if(setSelOn){ sticky.classList.remove('collapsed'); lastTop = st; return; }
+    if(st > 96 && st > lastTop + 2) sticky.classList.add('collapsed');
+    if(st < 28) sticky.classList.remove('collapsed');
+    lastTop = st;
+  }, { passive: true });
+  document.addEventListener('click', (e) => {
+    const sticky = $('#setSticky');
+    if(!sticky || !sticky.classList.contains('collapsed')) return;
+    if(e.target.closest('#setSticky')) sticky.classList.remove('collapsed');
+  });
+})();
 
 /* 窗口变化 */
 let rzTimer = null;
